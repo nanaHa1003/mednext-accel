@@ -102,6 +102,134 @@ class ExpandedBranchCheckpointBlockTests(unittest.TestCase):
         checkpoint.assert_not_called()
 
 
+class MedNeXtCheckpointPolicyTests(unittest.TestCase):
+    @staticmethod
+    def _model(**options):
+        return mednext.MedNeXt(
+            spatial_dims=3,
+            in_channels=1,
+            out_channels=3,
+            kernel_size=3,
+            filters=2,
+            num_blocks=[1, 1, 1],
+            expand_ratio=[2, 2, 2],
+            **options,
+        )
+
+    def test_policy_resolution_and_block_propagation(self):
+        default = self._model()
+        explicit_none = self._model(checkpoint_style="none")
+        legacy_block = self._model(use_grad_checkpoint=True)
+        explicit_block = self._model(checkpoint_style="block")
+        expanded = self._model(checkpoint_style="expanded")
+
+        self.assertEqual(default.checkpoint_style, "none")
+        self.assertEqual(explicit_none.checkpoint_style, "none")
+        self.assertEqual(legacy_block.checkpoint_style, "block")
+        self.assertTrue(legacy_block.use_grad_checkpoint)
+        self.assertEqual(explicit_block.checkpoint_style, "block")
+        self.assertTrue(explicit_block.use_grad_checkpoint)
+        self.assertEqual(expanded.checkpoint_style, "expanded")
+        self.assertFalse(expanded.use_grad_checkpoint)
+
+        expanded_blocks = [
+            module for module in expanded.modules()
+            if isinstance(module, mednext.MedNeXtBlock)
+        ]
+        block_policy_blocks = [
+            module for module in explicit_block.modules()
+            if isinstance(module, mednext.MedNeXtBlock)
+        ]
+        self.assertTrue(expanded_blocks)
+        self.assertTrue(all(module.checkpoint_expanded for module in expanded_blocks))
+        self.assertTrue(all(
+            not module.checkpoint_expanded for module in block_policy_blocks))
+
+    def test_rejects_conflicting_legacy_and_explicit_options(self):
+        with self.assertRaisesRegex(ValueError, "use_grad_checkpoint"):
+            self._model(use_grad_checkpoint=True, checkpoint_style="expanded")
+
+    def test_all_factories_propagate_expanded_policy(self):
+        for factory_name in (
+            "mednext_small", "mednext_base", "mednext_medium", "mednext_large"
+        ):
+            with self.subTest(factory=factory_name):
+                model = getattr(mednext, factory_name)(
+                    spatial_dims=3,
+                    in_channels=1,
+                    out_channels=3,
+                    filters=1,
+                    checkpoint_style="expanded",
+                )
+                blocks = [
+                    module for module in model.modules()
+                    if isinstance(module, mednext.MedNeXtBlock)
+                ]
+                self.assertTrue(blocks)
+                self.assertTrue(all(module.checkpoint_expanded for module in blocks))
+
+    def test_state_dict_and_eval_output_are_policy_independent(self):
+        torch.manual_seed(41)
+        x = torch.randn(1, 1, 16, 16, 16)
+        for deep_supervision in (False, True):
+            with self.subTest(deep_supervision=deep_supervision):
+                reference = self._model(
+                    deep_supervision=deep_supervision,
+                    checkpoint_style="none",
+                ).eval()
+                for style in ("expanded", "block"):
+                    candidate = self._model(
+                        deep_supervision=deep_supervision,
+                        checkpoint_style=style,
+                    ).eval()
+                    candidate.load_state_dict(
+                        copy.deepcopy(reference.state_dict()), strict=True)
+                    self.assertEqual(
+                        list(reference.state_dict()), list(candidate.state_dict()))
+                    with torch.no_grad():
+                        torch.testing.assert_close(
+                            reference(x), candidate(x), rtol=0, atol=0)
+
+    def test_training_output_and_gradients_match_expanded_policy(self):
+        torch.manual_seed(43)
+        for deep_supervision in (False, True):
+            with self.subTest(deep_supervision=deep_supervision):
+                reference = self._model(
+                    deep_supervision=deep_supervision,
+                    checkpoint_style="none",
+                ).double().train()
+                candidate = self._model(
+                    deep_supervision=deep_supervision,
+                    checkpoint_style="expanded",
+                ).double().train()
+                candidate.load_state_dict(
+                    copy.deepcopy(reference.state_dict()), strict=True)
+
+                reference_input = torch.randn(
+                    1, 1, 16, 16, 16, dtype=torch.float64, requires_grad=True)
+                candidate_input = reference_input.detach().clone().requires_grad_(True)
+                reference_output = reference(reference_input)
+                candidate_output = candidate(candidate_input)
+                reference_output.square().sum().backward()
+                candidate_output.square().sum().backward()
+
+                torch.testing.assert_close(
+                    reference_output, candidate_output, rtol=0, atol=0)
+                torch.testing.assert_close(
+                    reference_input.grad, candidate_input.grad, rtol=0, atol=0)
+                reference_parameters = dict(reference.named_parameters())
+                candidate_parameters = dict(candidate.named_parameters())
+                self.assertEqual(reference_parameters.keys(), candidate_parameters.keys())
+                for name in reference_parameters:
+                    with self.subTest(parameter=name):
+                        torch.testing.assert_close(
+                            reference_parameters[name].grad,
+                            candidate_parameters[name].grad,
+                            rtol=0,
+                            atol=0,
+                        )
+
+
 class EvalApproximateGELUTests(unittest.TestCase):
     def test_exact_during_training_and_approximate_during_eval(self):
         activation = mednext.EvalModeGELU(approximate_eval=True)
