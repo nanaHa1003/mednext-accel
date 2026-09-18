@@ -64,7 +64,8 @@ torch.save(model.state_dict(), "weights.pt")
 
 The wrapper returned by `compiled = torch.compile(model)` may prefix state-dict
 keys with `_orig_mod.`. `mednext_accel.checkpoints.load_checkpoint` removes that
-prefix, so those checkpoints load into an eager model. For portable application
-code, save and load the original model rather than depending on the wrapper's
-private `_orig_mod` attribute. Compiled kernels live in compiler caches and are
-not part of the checkpoint.
+prefix when reading and unwraps a compiled target when writing, so eager and
+compiled-wrapper checkpoints load in either direction. For portable application
+code, save and load the original model rather than depending directly on the
+wrapper's private `_orig_mod` attribute. Compiled kernels live in compiler caches
+and are not part of the checkpoint.

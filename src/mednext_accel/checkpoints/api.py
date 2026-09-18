@@ -127,6 +127,18 @@ def _extract_state_dict(
     raise ValueError("checkpoint does not contain a recognizable tensor state dict")
 
 
+def _unwrap_compile_target(model: nn.Module) -> nn.Module:
+    """Return the original module behind a ``torch.compile`` wrapper."""
+
+    original = getattr(model, "_orig_mod", None)
+    if not isinstance(original, nn.Module):
+        return model
+    keys = tuple(model.state_dict())
+    if keys and all(key.startswith("_orig_mod.") for key in keys):
+        return original
+    return model
+
+
 def load_checkpoint(
     model: nn.Module,
     checkpoint: Mapping[str, object] | str | PathLike[str],
@@ -143,12 +155,13 @@ def load_checkpoint(
         checkpoint = loaded
     state_dict = _extract_state_dict(checkpoint)
     converted, resolved, ignored = _convert(state_dict, source=source)
-    config = getattr(model, "config", None)
+    target = _unwrap_compile_target(model)
+    config = getattr(target, "config", None)
     _validate_compatibility(
         resolved,
         config if isinstance(config, MedNeXtV1Config) else None,
     )
-    incompatible = model.load_state_dict(converted, strict=strict)
+    incompatible = target.load_state_dict(converted, strict=strict)
     return CheckpointLoadReport(
         source=cast(Literal["native", "official_v1", "monai"], resolved),
         loaded_keys=tuple(converted),

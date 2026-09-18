@@ -92,3 +92,15 @@ def test_torch_compile_wrapper_checkpoint_loads_into_eager_model() -> None:
     assert report.source == "native"
     for actual, expected in zip(target.parameters(), source.parameters(), strict=True):
         torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+
+def test_eager_checkpoint_loads_into_torch_compile_wrapper() -> None:
+    source = mednext_small(in_channels=1, out_channels=3, base_channels=2).eval()
+    target = mednext_small(in_channels=1, out_channels=3, base_channels=2).eval()
+    compiled_target = torch.compile(target)
+
+    report = load_checkpoint(compiled_target, source.state_dict(), source="native")
+
+    assert report.source == "native"
+    for actual, expected in zip(target.parameters(), source.parameters(), strict=True):
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
