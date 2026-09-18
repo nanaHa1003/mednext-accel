@@ -18,6 +18,9 @@ CASES = {
     'autotune': ['--no-checkpoint', '--cudnn-benchmark'],
     'channels_last': ['--no-checkpoint', '--cudnn-benchmark', '--channels-last'],
     'compile': ['--no-checkpoint', '--cudnn-benchmark', '--compile'],
+    'eager_expanded': ['--checkpoint-style', 'expanded'],
+    'compile_expanded': [
+        '--checkpoint-style', 'expanded', '--cudnn-benchmark', '--compile'],
     'compile_ckpt': ['--checkpoint', '--cudnn-benchmark', '--compile'],
 }
 

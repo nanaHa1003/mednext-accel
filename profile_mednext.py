@@ -21,6 +21,7 @@ import torch.nn.functional as F
 from torch.profiler import ProfilerActivity, profile, record_function
 
 import mednext
+from activation_checkpoint import CHECKPOINT_STYLES
 
 
 def loss_fn(prediction, target, deep_supervision):
@@ -40,7 +41,12 @@ def main():
     parser.add_argument('--kernel-size', type=int, default=3)
     parser.add_argument('--precision', choices=['fp32', 'bf16', 'fp16'], required=True)
     parser.add_argument('--deep-supervision', action=argparse.BooleanOptionalAction, required=True)
-    parser.add_argument('--checkpoint', action=argparse.BooleanOptionalAction, required=True)
+    checkpoint_group = parser.add_mutually_exclusive_group(required=True)
+    checkpoint_group.add_argument(
+        '--checkpoint', dest='legacy_checkpoint', action='store_const', const=True)
+    checkpoint_group.add_argument(
+        '--no-checkpoint', dest='legacy_checkpoint', action='store_const', const=False)
+    checkpoint_group.add_argument('--checkpoint-style', choices=CHECKPOINT_STYLES)
     parser.add_argument('--channels-last', action='store_true')
     parser.add_argument('--compile', action='store_true')
     parser.add_argument('--pointwise-gemm', action='store_true',
@@ -59,6 +65,13 @@ def main():
     parser.add_argument('--profile-steps', type=int, default=3)
     parser.add_argument('--output', type=Path, default=Path('profile_results'))
     args = parser.parse_args()
+    if args.checkpoint_style is None:
+        args.effective_checkpoint_style = (
+            'block' if args.legacy_checkpoint else 'none')
+    else:
+        args.effective_checkpoint_style = args.checkpoint_style
+    # Retain the historical summary field for existing result consumers.
+    args.checkpoint = args.effective_checkpoint_style == 'block'
     if len(args.shape) not in (4, 5) or any(v <= 0 for v in args.shape):
         parser.error('--shape must contain four or five positive dimensions')
     if any(v % 16 for v in args.shape[2:]):
@@ -82,7 +95,8 @@ def main():
     model = getattr(mednext, f'mednext_{args.variant}')(
         spatial_dims=len(args.shape) - 2, in_channels=args.shape[1],
         out_channels=args.classes, filters=args.filters, kernel_size=args.kernel_size,
-        deep_supervision=args.deep_supervision, use_grad_checkpoint=args.checkpoint,
+        deep_supervision=args.deep_supervision,
+        checkpoint_style=args.effective_checkpoint_style,
     ).to(args.device).train()
     pointwise_replacements = 0
     if args.pointwise_gemm:

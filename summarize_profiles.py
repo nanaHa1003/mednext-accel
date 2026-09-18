@@ -11,9 +11,18 @@ from pathlib import Path
 import statistics
 
 
+def checkpoint_style_from_settings(settings):
+    """Read new policy metadata while retaining old profiler results."""
+    return settings.get(
+        'effective_checkpoint_style',
+        'block' if settings.get('checkpoint') else 'none',
+    )
+
+
 def summarize(directory):
     summary = json.loads((directory / 'summary.json').read_text())
     settings = summary['settings']
+    effective_checkpoint_style = checkpoint_style_from_settings(settings)
     row = {'run': directory.name, 'gpu': summary['device'],
            'torch': summary['torch'], 'cuda': summary['cuda_build'], 'cudnn': summary['cudnn'],
            'hostname': summary.get('hostname'), 'driver_inventory': summary.get('driver_inventory'),
@@ -21,6 +30,7 @@ def summarize(directory):
            **{k: settings.get(k) for k in ['variant', 'classes', 'precision', 'checkpoint',
                'deep_supervision', 'channels_last', 'compile', 'cudnn_benchmark', 'filters',
                'kernel_size', 'lr', 'seed', 'warmup', 'steps']},
+           'effective_checkpoint_style': effective_checkpoint_style,
            'shape': str(settings['shape']),
            'cudnn_allow_tf32': summary['cudnn_allow_tf32'],
            'matmul_allow_tf32': summary['matmul_allow_tf32'],
@@ -88,7 +98,8 @@ def aggregate(rows):
     keys = ['pointwise_gemm', 'pointwise_gemm_sha256', 'depthwise_split',
             'depthwise_split_sha256', 'gpu', 'hostname', 'driver_inventory',
             'torch', 'cuda', 'cudnn', 'model_sha256',
-            'variant', 'shape', 'classes', 'precision', 'checkpoint', 'deep_supervision',
+            'variant', 'shape', 'classes', 'precision', 'checkpoint',
+            'effective_checkpoint_style', 'deep_supervision',
             'channels_last', 'compile', 'cudnn_benchmark', 'filters', 'kernel_size',
             'lr', 'seed', 'warmup', 'steps', 'cudnn_allow_tf32', 'matmul_allow_tf32']
     groups = defaultdict(list)
