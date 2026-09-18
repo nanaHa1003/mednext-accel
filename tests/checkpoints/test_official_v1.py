@@ -72,3 +72,15 @@ def test_wrapped_official_checkpoint_loads_with_exact_output() -> None:
     assert report.unexpected_keys == ()
     with torch.no_grad():
         torch.testing.assert_close(target(sample), source(sample), rtol=0, atol=0)
+
+
+def test_torch_compile_wrapper_checkpoint_loads_into_eager_model() -> None:
+    source = mednext_small(in_channels=1, out_channels=3, base_channels=2).eval()
+    compiled = torch.compile(source)
+    target = mednext_small(in_channels=1, out_channels=3, base_channels=2).eval()
+
+    report = load_checkpoint(target, compiled.state_dict(), source="auto")
+
+    assert report.source == "native"
+    for actual, expected in zip(target.parameters(), source.parameters()):
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0)

@@ -560,11 +560,18 @@ _DOWNSAMPLE_CHANNELS = frozenset(channels for channels, _ in _DOWNSAMPLE_CONFIGS
 
 class SplitDepthwiseConv3d(torch.nn.Module):
     """Drop-in module for tuned regular depthwise backward configurations."""
+    _mednext_accel_backend_kind = "depthwise_regular"
     def __init__(self, conv, selected_shapes=None):
         super().__init__()
         self.weight = conv.weight
         self.bias = conv.bias
+        self.in_channels = conv.in_channels
+        self.out_channels = conv.out_channels
+        self.groups = conv.groups
         self.kernel_size = conv.kernel_size[0]
+        self.stride = conv.stride
+        self.padding = conv.padding
+        self.dilation = conv.dilation
         self.selected_shapes = (None if selected_shapes is None
                                 else frozenset(selected_shapes))
         self.train(conv.training)
@@ -592,10 +599,13 @@ class SplitDepthwiseConv3d(torch.nn.Module):
 
 class SplitDepthwiseConvTranspose3d(torch.nn.Module):
     """Drop-in module for tuned stride-two depthwise transpose dW."""
+    _mednext_accel_backend_kind = "depthwise_transpose"
     def __init__(self, conv, selected_shapes=None):
         super().__init__()
         self.weight = conv.weight
         self.bias = conv.bias
+        self.in_channels = conv.in_channels
+        self.out_channels = conv.out_channels
         self.kernel_size = conv.kernel_size[0]
         self.stride = conv.stride
         self.padding = conv.padding
@@ -626,10 +636,13 @@ class SplitDepthwiseConvTranspose3d(torch.nn.Module):
 
 class SplitDepthwiseDownsampleConv3d(torch.nn.Module):
     """Drop-in module for a measured stride-two depthwise dX prototype."""
+    _mednext_accel_backend_kind = "depthwise_downsample"
     def __init__(self, conv, selected_shapes=None):
         super().__init__()
         self.weight = conv.weight
         self.bias = conv.bias
+        self.in_channels = conv.in_channels
+        self.out_channels = conv.out_channels
         self.kernel_size = conv.kernel_size[0]
         self.stride = conv.stride
         self.padding = conv.padding

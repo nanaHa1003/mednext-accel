@@ -14,6 +14,8 @@ PointwiseShape = tuple[int, int, int, int, int]
 class GemmPointwise3d(nn.Module):
     """Execute an eligible Conv3d as a matrix multiplication."""
 
+    _mednext_accel_backend_kind = "pointwise_gemm"
+
     def __init__(
         self,
         conv: nn.Conv3d,
@@ -24,6 +26,11 @@ class GemmPointwise3d(nn.Module):
         self.bias = conv.bias
         self.in_channels = conv.in_channels
         self.out_channels = conv.out_channels
+        self.kernel_size = conv.kernel_size
+        self.stride = conv.stride
+        self.padding = conv.padding
+        self.dilation = conv.dilation
+        self.groups = conv.groups
         self.selected_shapes = (
             None if selected_shapes is None else frozenset(selected_shapes)
         )
