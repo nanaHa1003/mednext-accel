@@ -1,0 +1,44 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+.venv-*/
+venv/
+env/
+
+# Packaging and build output
+build/
+dist/
+*.egg-info/
+*.whl
+*.tar.gz
+
+# Profiling, benchmark, and compiler artifacts
+profile_results/
+*.ncu-rep
+*.nsys-rep
+*.qdrep
+*.sqlite
+*.pt.trace.json
+*.log
+.triton/
+torch_compile_debug/
+
+# Local worktrees and editor files
+.worktrees/
+.idea/
+.vscode/
+*.swp
+*~
+
+# Platform metadata
+.DS_Store
+Thumbs.db

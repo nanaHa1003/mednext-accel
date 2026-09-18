@@ -1,0 +1,5 @@
+# PyTorch and its CUDA build are intentionally unpinned. Install the build
+# appropriate for the target GPU/driver from the desired PyTorch index.
+# The depthwise Triton path requires a PyTorch release exposing torch.library.triton_op.
+torch
+triton

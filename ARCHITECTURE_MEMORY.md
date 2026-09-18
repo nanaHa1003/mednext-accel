@@ -1,0 +1,355 @@
+# MedNeXt activation-memory optimization roadmap
+
+## Scope
+
+This document covers model-architecture and operator changes that can reduce
+training activation memory. It does not define a trainer, loss, dataset, data
+pipeline, or nnU-Net integration.
+
+MedNeXt v1 and v2 should remain separate model implementations. Shared pieces
+such as checkpoint policies, output containers, and optimized operators should
+be independent modules when they are also useful to other 3D ConvNeXt-like
+architectures. An optimization must preserve model parameters and mathematical
+behavior unless its API explicitly selects different output semantics.
+
+The priorities are:
+
+1. Selective checkpointing of the expanded branch.
+2. Resolution-aware checkpointing.
+3. Fused 3D Global Response Normalization (GRN).
+4. Memory-efficient GroupNorm.
+5. Configurable deep-supervision output, including MONAI-compatible behavior.
+
+## Measurement context
+
+The initial feasibility measurements use an RTX 5090, PyTorch 2.12.0+cu132,
+cuDNN 9.20, BF16 autocast, batch size one, input `128x128x128`, three output
+classes, deep supervision, AdamW, and `torch.compile`. Inputs and targets remain
+resident on the GPU. Each result below has two warmup steps and five measured
+steps, so it establishes direction rather than publication-quality statistics.
+
+Peak memory means PyTorch peak allocated memory. It excludes allocator reserve,
+CUDA context memory, and unrelated processes.
+
+### Initial checkpoint results
+
+| Model | Activation policy | Step time | Peak allocated |
+|---|---|---:|---:|
+| v1 Base | none | 74.52 ms | 8,423 MiB |
+| v1 Base | expanded branch | 79.76 ms | 3,851 MiB |
+| v1 Base | whole block | 87.26 ms | 3,284 MiB |
+| v1 Large | none | 138.15 ms | 17,731 MiB |
+| v1 Large | expanded branch | 148.16 ms | 5,945 MiB |
+| v1 Large | whole block | 159.89 ms | 5,674 MiB |
+
+For Base, expanded-branch checkpointing reduces peak allocation by 54.3% for a
+7.0% step-time increase. It obtains approximately 89% of the memory reduction
+of whole-block checkpointing while remaining 8.6% faster than the whole-block
+policy.
+
+For Large, expanded-branch checkpointing reduces peak allocation by 66.5% for a
+7.2% step-time increase. It obtains approximately 97.8% of the memory reduction
+of whole-block checkpointing while remaining 7.3% faster than the whole-block
+policy.
+
+The Large split-depthwise path also composes with selective checkpointing:
+
+| Configuration | Step time | Peak allocated |
+|---|---:|---:|
+| Native convolution, no checkpoint | 138.15 ms | 17,731 MiB |
+| Split depthwise, no checkpoint | 113.96 ms | 17,731 MiB |
+| Split depthwise, expanded-branch checkpoint | 125.40 ms | 5,947 MiB |
+
+A double-precision single-block check found maximum absolute differences of
+zero for output, input gradient, and every parameter gradient between ordinary
+execution and expanded-branch checkpointing.
+
+## 1. Selective expanded-branch checkpointing
+
+### Motivation
+
+A MedNeXt block contains:
+
+```text
+depthwise convolution -> GroupNorm -> pointwise expansion -> GELU
+    -> optional GRN -> pointwise compression -> residual addition
+```
+
+The expanded activation has `C * R` channels. At the full-resolution stage of
+MedNeXt Large, one BF16 `[1, 96, 128, 128, 128]` tensor is approximately
+384 MiB. Autograd may need both pre-activation and post-activation values for
+the GELU and compression-convolution backward passes. These long-lived expanded
+tensors dominate the activation footprint.
+
+### Proposed behavior
+
+Checkpoint only the following branch:
+
+```text
+v1: pointwise expansion -> GELU -> pointwise compression
+v2: pointwise expansion -> GELU -> GRN -> pointwise compression
+```
+
+The forward pass retains the normalized `C`-channel input to this branch.
+Backward recomputes the `C * R` expansion instead of retaining it across the
+forward/backward boundary. Depthwise convolution and GroupNorm are not
+recomputed.
+
+Use non-reentrant PyTorch checkpointing. Apply it only when the module is in
+training mode and gradients are enabled. Evaluation must execute the branch
+directly.
+
+### Compatibility requirements
+
+- Do not move or rename convolution Parameters.
+- Preserve all state-dict keys.
+- Preserve the eager and compiled forward result.
+- Support AMP and `torch.compile`.
+- Compose with native and custom depthwise operators.
+- Treat this as an execution policy, not a new model variant.
+
+The proposed policy name is `expanded`. The complete policy vocabulary should
+eventually be `none`, `expanded`, and `block`.
+
+### Validation still required
+
+- Repeat the Base and Large measurements with at least three independent runs.
+- Compare FP32, BF16, and FP16 output and gradients against ordinary execution.
+- Test checkpoint save/load before and after enabling the policy.
+- Test eager, compiled, DDP, and all supported GPUs.
+- Profile compilation boundaries to ensure checkpointing does not introduce
+  unexpected graph breaks.
+
+## 2. Resolution-aware checkpointing
+
+### Motivation
+
+The highest-resolution stages dominate activation memory. Recomputing every
+expanded branch spends compute on small tensors that contribute little to peak
+allocation.
+
+For v1 Base, a single full-resolution expanded BF16 activation is roughly:
+
+```text
+[1, 64, 128, 128, 128] = 256 MiB
+```
+
+Activations at successive resolutions shrink by approximately a factor of four
+because spatial volume falls by eight while channels double. This makes the
+`128^3` and `64^3` stages the first checkpoint candidates.
+
+### Proposed behavior
+
+Represent checkpoint selection as a model execution policy rather than hard
+coding stage indices inside blocks. Candidate selectors are:
+
+- All expanded branches.
+- Expanded branches at or above a spatial-volume threshold.
+- Explicit encoder, bottleneck, decoder, downsample, and upsample stage masks.
+
+The first experiment should checkpoint only expanded branches at `128^3`, then
+`128^3 + 64^3`. A policy based on actual runtime spatial shape is convenient
+for fixed patches but can cause recompilation for dynamic shapes. A stage-based
+policy is more predictable for compiled models and should be preferred for the
+public interface.
+
+### Compatibility requirements
+
+- The policy must not affect state dicts.
+- A saved policy is configuration metadata, not a tensor weight.
+- Dynamic input shapes must not silently select a different mathematical model.
+- Checkpointing a stage changes compute and memory only.
+
+### Decision rule
+
+Keep resolution-aware selection only if it provides a useful point between
+`none` and `expanded` on the Pareto curve. It should be removed if the added
+configuration surface yields negligible speed improvement.
+
+## 3. Fused 3D GRN
+
+### Motivation
+
+GRN is specific to MedNeXt v2 and other ConvNeXt-v2-like models. A naive eager
+implementation materializes several large pointwise intermediates and caused a
+large time and memory increase in the initial v2 probe. Compilation eliminated
+almost all additional peak memory, so the primary goal of a custom operator is
+an efficient eager path without regressing compiled execution.
+
+For `x` in NCDHW layout, use the ConvNeXt-v2 definition:
+
+```text
+g[n,c] = sqrt(sum_spatial(x[n,c]^2))
+h[n]   = mean_channel(g[n,:]) + eps
+r[n,c] = g[n,c] / h[n]
+y      = x + gamma * x * r + beta
+```
+
+Use `eps=1e-6`, zero-initialized `gamma` and `beta`, and FP32 reduction
+accumulation. Do not materialize full-sized `r` or `x * r` tensors.
+
+### Proposed operator boundary
+
+GRN should be an architecture-independent layer with:
+
+- A pure PyTorch reference implementation.
+- A Triton forward and backward implementation.
+- Automatic fallback for CPU, unsupported dtypes, noncontiguous layouts, and
+  unsupported shapes.
+- Per-shape benchmarking before selecting the Triton implementation.
+
+The forward kernels compute spatial sum-of-squares partials, finish channel
+norms, reduce the channel mean, and apply the affine residual expression. The
+backward kernels compute spatial partials for `sum(dy*x)` and `sum(dy)`, finish
+the coupled channel derivative, and apply `dX`. FP16 and BF16 reductions use
+FP32 partials.
+
+Integrate the kernels with `torch.library.triton_op` and registered autograd so
+the implementation remains visible to `torch.compile`. A standalone custom-op
+boundary must not be enabled by default unless a full-model benchmark shows it
+is beneficial.
+
+### Success criteria
+
+- Correct forward, dX, dGamma, and dBeta against the PyTorch reference.
+- Correct zero-input behavior without division by zero.
+- Batch-one and multi-batch support.
+- `torch.library.opcheck` and compiled full-graph coverage.
+- A substantial eager memory reduction.
+- No material compiled full-step regression.
+- Independent results on RTX 5090, L40S, RTX A6000, and RTX 8000.
+
+Fusion with GELU or the compression GEMM is outside the first implementation.
+
+## 4. Memory-efficient GroupNorm
+
+### Motivation
+
+MedNeXt uses `GroupNorm(C, C)`, which is mathematically instance normalization
+for NCDHW tensors. GroupNorm operates on `C` channels rather than the expanded
+`C * R` representation, so its memory opportunity is smaller than selective
+checkpointing. It remains relevant after the expanded tensors are removed.
+
+### Candidate approaches
+
+1. Keep native GroupNorm and rely on `torch.compile` fusion.
+2. Recompute normalized values in backward while saving only the input and
+   per-instance/channel statistics.
+3. Implement a Triton GroupNorm/InstanceNorm forward and backward using FP32
+   reductions and fused affine application.
+4. Investigate a fused depthwise-convolution-to-normalization boundary only
+   after standalone GroupNorm measurements justify the complexity.
+
+Kernel fusion alone does not remove an activation that autograd deliberately
+saves for backward. A custom backward or checkpoint boundary is necessary for
+a material lifetime reduction.
+
+### Decision rule
+
+Profile this only after selective expanded-branch checkpointing is integrated.
+Proceed with a custom operator only if GroupNorm becomes a significant share of
+the resulting compiled full step or materially limits peak allocation. Preserve
+the native implementation as the default until then.
+
+## 5. Configurable deep-supervision output
+
+### Current repository behavior
+
+During training with deep supervision enabled, every auxiliary logit tensor is
+interpolated to the full output resolution and stacked:
+
+```text
+[N, heads, classes, D, H, W]
+```
+
+The head order is full resolution followed by `1/2`, `1/4`, `1/8`, and `1/16`
+decoder resolutions, after interpolation. Evaluation returns only the final
+full-resolution tensor.
+
+For BF16, five full-resolution heads at `128^3` require approximately 60 MiB
+for three classes and 160 MiB for eight classes for the final stacked tensor
+alone. Interpolation results and backward state can raise the peak further.
+
+### MONAI behavior
+
+MONAI 1.5.2 returns native-resolution logits during training:
+
+```python
+(
+    full_resolution,
+    half_resolution,
+    quarter_resolution,
+    eighth_resolution,
+    sixteenth_resolution,
+)
+```
+
+The return type is a tuple. MONAI does not interpolate the auxiliary heads to
+full resolution and does not stack them. When the model is in evaluation mode,
+it returns only the full-resolution tensor even if deep supervision is enabled.
+
+The head ordering in the current repository and MONAI is semantically the same;
+the differences are native versus interpolated spatial shapes and tuple versus
+stacked-tensor representation.
+
+### Proposed switch
+
+Keep deep supervision independently switchable from its output representation:
+
+```text
+deep_supervision = false
+    train/eval -> full-resolution Tensor
+
+deep_supervision = true, output = "monai"
+    train -> tuple of native-resolution Tensor objects
+    eval  -> full-resolution Tensor
+
+deep_supervision = true, output = "stacked"
+    train -> all heads interpolated and stacked at full resolution
+    eval  -> full-resolution Tensor
+```
+
+A proposed future argument is:
+
+```python
+deep_supervision_output: Literal["monai", "stacked"]
+```
+
+The default is deliberately undecided until the public API and backward-
+compatibility policy are designed. The existing implementation uses `stacked`;
+MONAI interoperability favors `monai`.
+
+### Compatibility boundaries
+
+- `monai` mode should match MONAI's type, head ordering, native spatial shapes,
+  and train/eval behavior.
+- `stacked` mode should preserve the current repository behavior.
+- The model returns logits only. It does not resize targets, assign auxiliary
+  loss weights, or compute a loss.
+- Checkpoint weights must be independent of the selected output representation.
+- Changing output representation is an explicit API behavior change, even
+  though it does not change model Parameters.
+- Output-mode tests must cover odd valid input sizes because upsampling and
+  native auxiliary shapes can otherwise expose alignment differences.
+
+### Validation still required
+
+- Direct output-contract comparison against the supported MONAI version.
+- Peak-memory and step-time comparison for three and eight classes.
+- Eager and compiled coverage for both output modes.
+- Training/evaluation transition tests.
+- Tests showing identical final full-resolution logits between modes.
+
+## Recommended implementation order
+
+1. Turn the expanded-branch prototype into a tested execution policy without
+   changing state-dict keys.
+2. Measure high-resolution-only policies and retain only useful Pareto points.
+3. Add the deep-supervision output switch and MONAI contract tests.
+4. Re-profile the resulting Base and Large models.
+5. Implement fused GRN if eager v2 remains a supported performance target.
+6. Reconsider GroupNorm only if the new profile justifies it.
+
+This order prioritizes the largest measured memory reduction, establishes the
+output compatibility contract early, and postpones custom kernels until the
+remaining bottlenecks are measured in the updated model.
