@@ -182,6 +182,11 @@ report = optimize(
 model.compile(mode=report.compile_mode, fullgraph=True)
 ```
 
+Use `fullgraph=True` when the complete training graph is supported. On the RTX
+5090, `mode="default"` is a good general setting, while
+`mode="max-autotune-no-cudagraphs"` has worked well for long runs with a fixed
+input shape and enough steps to amortize compilation.
+
 The `torch` policy uses only native operators. `conservative` applies the narrow
 RTX 50-series BF16 configurations validated in this repository. `autotune`
 benchmarks every unique eligible shape on the current GPU and caches the result.

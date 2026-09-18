@@ -19,6 +19,11 @@ python benchmarks/pointwise.py \
 python benchmarks/implementations.py \
   --official-root /tmp/MedNeXt-official \
   --output artifacts/implementation-comparison.json
+
+# Batch-size memory scaling across checkpoint policies
+python benchmarks/batch_memory.py \
+  --batch-sizes 1 2 4 8 \
+  --output artifacts/batch-memory.json
 ```
 
 Run benchmarks on an otherwise idle GPU. Record the GPU, driver, PyTorch, CUDA,
