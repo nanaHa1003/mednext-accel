@@ -21,6 +21,15 @@ CASES = {
     'eager_expanded': ['--checkpoint-style', 'expanded'],
     'compile_expanded': [
         '--checkpoint-style', 'expanded', '--cudnn-benchmark', '--compile'],
+    'compile_expanded_l0': [
+        '--checkpoint-style', 'expanded', '--checkpoint-levels', '0',
+        '--cudnn-benchmark', '--compile'],
+    'compile_expanded_l01': [
+        '--checkpoint-style', 'expanded', '--checkpoint-levels', '0', '1',
+        '--cudnn-benchmark', '--compile'],
+    'compile_expanded_l012': [
+        '--checkpoint-style', 'expanded', '--checkpoint-levels', '0', '1', '2',
+        '--cudnn-benchmark', '--compile'],
     'compile_ckpt': ['--checkpoint', '--cudnn-benchmark', '--compile'],
 }
 

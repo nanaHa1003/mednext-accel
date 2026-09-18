@@ -29,6 +29,13 @@ class ProfilingCheckpointPolicyTests(unittest.TestCase):
                 {"checkpoint": False, "effective_checkpoint_style": "expanded"}),
             "expanded",
         )
+        self.assertEqual(
+            summarize_profiles.checkpoint_levels_from_settings({}), "all")
+        self.assertEqual(
+            summarize_profiles.checkpoint_levels_from_settings(
+                {"effective_checkpoint_levels": [0, 1]}),
+            "0,1",
+        )
 
     def test_profiler_accepts_and_records_expanded_policy(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -43,6 +50,7 @@ class ProfilingCheckpointPolicyTests(unittest.TestCase):
                 "--precision", "fp32",
                 "--no-deep-supervision",
                 "--checkpoint-style", "expanded",
+                "--checkpoint-levels", "1", "0",
                 "--device", "cpu",
                 "--warmup", "1",
                 "--steps", "1",
@@ -54,7 +62,33 @@ class ProfilingCheckpointPolicyTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
             settings = json.loads((output / "summary.json").read_text())["settings"]
             self.assertEqual(settings["effective_checkpoint_style"], "expanded")
+            self.assertEqual(settings["effective_checkpoint_levels"], [0, 1])
             self.assertFalse(settings["checkpoint"])
+
+    def test_profiler_rejects_levels_with_nonexpanded_policy(self):
+        for checkpoint_flag in ("--no-checkpoint", "--checkpoint"):
+            with self.subTest(checkpoint_flag=checkpoint_flag):
+                command = [
+                    sys.executable,
+                    str(ROOT / "profile_mednext.py"),
+                    "--variant", "small",
+                    "--shape", "1", "1", "32", "32",
+                    "--classes", "3",
+                    "--filters", "2",
+                    "--precision", "fp32",
+                    "--no-deep-supervision",
+                    checkpoint_flag,
+                    "--checkpoint-levels", "0",
+                    "--device", "cpu",
+                    "--warmup", "1",
+                    "--steps", "1",
+                    "--profile-steps", "0",
+                ]
+                result = subprocess.run(
+                    command, cwd=ROOT, text=True, capture_output=True, timeout=30)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(
+                    "only valid with --checkpoint-style expanded", result.stderr)
 
     def test_profiler_preserves_legacy_checkpoint_flags(self):
         for flag, expected_style in (
@@ -99,7 +133,9 @@ class ProfilingCheckpointPolicyTests(unittest.TestCase):
                 "--shape", "1", "1", "128", "128", "128",
                 "--classes", "3",
                 "--precisions", "bf16",
-                "--cases", "compile", "compile_expanded", "compile_ckpt",
+                "--cases", "compile", "compile_expanded_l0",
+                "compile_expanded_l01", "compile_expanded_l012",
+                "compile_expanded", "compile_ckpt",
                 "--repeats", "1",
                 "--dry-run",
             ]
@@ -107,6 +143,10 @@ class ProfilingCheckpointPolicyTests(unittest.TestCase):
                 command, cwd=ROOT, text=True, capture_output=True, timeout=30)
             self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
             self.assertIn("--checkpoint-style expanded", result.stdout)
+            self.assertIn("--checkpoint-levels 0 --cudnn-benchmark", result.stdout)
+            self.assertIn("--checkpoint-levels 0 1 --cudnn-benchmark", result.stdout)
+            self.assertIn(
+                "--checkpoint-levels 0 1 2 --cudnn-benchmark", result.stdout)
             self.assertIn("--no-checkpoint", result.stdout)
             self.assertIn("--checkpoint", result.stdout)
 

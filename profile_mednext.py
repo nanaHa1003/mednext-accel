@@ -47,6 +47,7 @@ def main():
     checkpoint_group.add_argument(
         '--no-checkpoint', dest='legacy_checkpoint', action='store_const', const=False)
     checkpoint_group.add_argument('--checkpoint-style', choices=CHECKPOINT_STYLES)
+    parser.add_argument('--checkpoint-levels', type=int, nargs='+')
     parser.add_argument('--channels-last', action='store_true')
     parser.add_argument('--compile', action='store_true')
     parser.add_argument('--pointwise-gemm', action='store_true',
@@ -70,6 +71,10 @@ def main():
             'block' if args.legacy_checkpoint else 'none')
     else:
         args.effective_checkpoint_style = args.checkpoint_style
+    if (args.checkpoint_levels is not None
+            and args.effective_checkpoint_style != 'expanded'):
+        parser.error(
+            '--checkpoint-levels is only valid with --checkpoint-style expanded')
     # Retain the historical summary field for existing result consumers.
     args.checkpoint = args.effective_checkpoint_style == 'block'
     if len(args.shape) not in (4, 5) or any(v <= 0 for v in args.shape):
@@ -97,7 +102,15 @@ def main():
         out_channels=args.classes, filters=args.filters, kernel_size=args.kernel_size,
         deep_supervision=args.deep_supervision,
         checkpoint_style=args.effective_checkpoint_style,
+        checkpoint_levels=(
+            None if args.checkpoint_levels is None
+            else tuple(args.checkpoint_levels)
+        ),
     ).to(args.device).train()
+    args.effective_checkpoint_levels = (
+        None if model.checkpoint_levels is None
+        else list(model.checkpoint_levels)
+    )
     pointwise_replacements = 0
     if args.pointwise_gemm:
         from pointwise_gemm import replace_pointwise_convs
