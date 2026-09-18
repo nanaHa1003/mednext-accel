@@ -79,14 +79,37 @@ def test_eval_uses_traceable_native_convolution(monkeypatch: pytest.MonkeyPatch)
 
 @pytest.mark.cuda
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
-def test_regular_wrapper_matches_forward_and_all_gradients() -> None:
+@pytest.mark.parametrize("batch_size", [1, 2])
+def test_regular_wrapper_matches_forward_and_all_gradients(
+    batch_size: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import mednext_accel.ops._triton.depthwise as backend
+
     torch.manual_seed(5)
     original = (
         nn.Sequential(nn.Conv3d(128, 128, 3, padding=1, groups=128)).cuda().to(torch.bfloat16)
     )
     candidate = copy.deepcopy(original)
     replace_depthwise_convs(candidate)
-    x = torch.randn(1, 128, 32, 32, 32, device="cuda", dtype=torch.bfloat16, requires_grad=True)
+    calls = 0
+    custom_op = backend.depthwise_conv3d_regular
+
+    def tracked(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return custom_op(*args, **kwargs)
+
+    monkeypatch.setattr(backend, "depthwise_conv3d_regular", tracked)
+    x = torch.randn(
+        batch_size,
+        128,
+        32,
+        32,
+        32,
+        device="cuda",
+        dtype=torch.bfloat16,
+        requires_grad=True,
+    )
     z = x.detach().clone().requires_grad_()
 
     expected, actual = original(x), candidate(z)
@@ -105,6 +128,56 @@ def test_regular_wrapper_matches_forward_and_all_gradients() -> None:
             actual_tensor.float() - expected_tensor.float()
         ).norm() / expected_tensor.float().norm().clamp_min(1e-12)
         assert relative_error.item() < 0.01
+    assert calls == 1
+
+
+@pytest.mark.cuda
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.parametrize("kind", ["transpose", "downsample"])
+def test_resampling_wrapper_matches_batch_two_gradients(
+    kind: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import mednext_accel.ops._triton.depthwise as backend
+
+    torch.manual_seed(11)
+    if kind == "transpose":
+        conv = nn.ConvTranspose3d(3, 3, 3, stride=2, padding=1, groups=3)
+        wrapper_type = backend.SplitDepthwiseConvTranspose3d
+        monkeypatch.setitem(backend._TRANSPOSE_CONFIGS, (3, 4), (2, 128))
+        operation_name = "depthwise_conv_transpose3d_regular"
+        spatial = 4
+    else:
+        conv = nn.Conv3d(3, 3, 3, stride=2, padding=1, groups=3)
+        wrapper_type = backend.SplitDepthwiseDownsampleConv3d
+        monkeypatch.setitem(backend._DOWNSAMPLE_CONFIGS, (3, 8), 128)
+        operation_name = "depthwise_conv3d_stride2_regular"
+        spatial = 8
+    original = nn.Sequential(conv).cuda().to(torch.bfloat16)
+    candidate = nn.Sequential(wrapper_type(copy.deepcopy(conv))).cuda().to(torch.bfloat16)
+    calls = 0
+    custom_op = getattr(backend, operation_name)
+
+    def tracked(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return custom_op(*args, **kwargs)
+
+    monkeypatch.setattr(backend, operation_name, tracked)
+    x = torch.randn(
+        2, 3, spatial, spatial, spatial, device="cuda", dtype=torch.bfloat16, requires_grad=True
+    )
+    z = x.detach().clone().requires_grad_()
+    expected, actual = original(x), candidate(z)
+    gradient = torch.randn_like(expected)
+    expected_all = (expected, *torch.autograd.grad(expected, (x, *original.parameters()), gradient))
+    actual_all = (actual, *torch.autograd.grad(actual, (z, *candidate.parameters()), gradient))
+
+    for actual_tensor, expected_tensor in zip(actual_all, expected_all, strict=True):
+        relative_error = (
+            actual_tensor.float() - expected_tensor.float()
+        ).norm() / expected_tensor.float().norm().clamp_min(1e-12)
+        assert relative_error.item() < 0.01
+    assert calls == 1
 
 
 @pytest.mark.cuda

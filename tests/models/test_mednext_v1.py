@@ -136,7 +136,7 @@ def test_checkpoint_policy_compiles_fullgraph(style: str) -> None:
         .train()
     )
     model.compile(mode="default", fullgraph=True)
-    sample = torch.randn(1, 1, 32, 32, 32, device="cuda", requires_grad=True)
+    sample = torch.randn(2, 1, 32, 32, 32, device="cuda", requires_grad=True)
 
     output = model(sample)
     assert isinstance(output, torch.Tensor)

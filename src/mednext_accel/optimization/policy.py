@@ -29,7 +29,7 @@ def conservative_selections(
         and capability == (12, 0)
         and dtype is torch.bfloat16
         and len(input_shape) == 5
-        and input_shape[0] == 1
+        and input_shape[0] >= 1
         and input_shape[2:] == (128, 128, 128)
     )
     if not supported:

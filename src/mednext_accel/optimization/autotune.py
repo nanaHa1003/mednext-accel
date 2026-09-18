@@ -17,7 +17,7 @@ from torch.nn import functional as F
 from .. import __version__
 from .report import BackendSelections, CompileMode, KernelMeasurement
 
-_CACHE_VERSION = 1
+_CACHE_VERSION = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,6 +35,7 @@ def _bench(function: Any, warmup: int, repetitions: int) -> float:
 
 
 def _benchmark_pointwise(
+    batch_size: int,
     in_channels: int,
     out_channels: int,
     spatial: tuple[int, ...],
@@ -42,10 +43,10 @@ def _benchmark_pointwise(
     warmup: int,
     repetitions: int,
 ) -> tuple[float, float]:
-    x = torch.randn((1, in_channels, *spatial), device="cuda", dtype=dtype)
+    x = torch.randn((batch_size, in_channels, *spatial), device="cuda", dtype=dtype)
     weight = torch.randn((out_channels, in_channels, 1, 1, 1), device="cuda", dtype=dtype)
     bias = torch.randn((out_channels,), device="cuda", dtype=dtype)
-    gradient = torch.randn((1, out_channels, *spatial), device="cuda", dtype=dtype)
+    gradient = torch.randn((batch_size, out_channels, *spatial), device="cuda", dtype=dtype)
 
     def native() -> None:
         F.conv3d(x, weight, bias)
@@ -64,18 +65,20 @@ def _benchmark_pointwise(
         )
 
     def candidate() -> None:
-        flattened = x.flatten(2)[0]
+        flattened = x.flatten(2)
+        flattened_gradient = gradient.flatten(2)
         matrix = weight.flatten(1)
-        matrix.t().mm(gradient.flatten(2)[0])
-        gradient.flatten(2)[0].mm(flattened.t())
-        gradient.flatten(2)[0].sum(dim=1)
-        torch.addmm(bias[:, None], matrix, flattened)
+        torch.matmul(matrix.t(), flattened_gradient)
+        torch.matmul(flattened_gradient, flattened.transpose(1, 2)).sum(dim=0)
+        flattened_gradient.sum(dim=(0, 2))
+        torch.matmul(matrix, flattened) + bias[None, :, None]
 
     return _bench(native, warmup, repetitions), _bench(candidate, warmup, repetitions)
 
 
 def _benchmark_depthwise(
     kind: str,
+    batch_size: int,
     channels: int,
     spatial: int,
     dtype: torch.dtype,
@@ -84,7 +87,7 @@ def _benchmark_depthwise(
 ) -> tuple[float, float]:
     from ..ops._triton import depthwise as backend
 
-    x = torch.randn((1, channels, spatial, spatial, spatial), device="cuda", dtype=dtype)
+    x = torch.randn((batch_size, channels, spatial, spatial, spatial), device="cuda", dtype=dtype)
     weight = torch.randn((channels, 1, 3, 3, 3), device="cuda", dtype=dtype)
     bias = torch.randn((channels,), device="cuda", dtype=dtype)
     if kind == "regular":
@@ -106,7 +109,7 @@ def _benchmark_depthwise(
             return F.conv3d(x, weight, bias, stride=2, padding=1, groups=channels)
     else:
         raise ValueError(f"unknown depthwise kind {kind!r}")
-    gradient = torch.randn((1, channels, *gradient_shape), device="cuda", dtype=dtype)
+    gradient = torch.randn((batch_size, channels, *gradient_shape), device="cuda", dtype=dtype)
 
     def native() -> None:
         forward()
@@ -342,8 +345,8 @@ def autotune_selections(
         raise ValueError("model must have parameters") from error
     if device.type != "cuda":
         raise ValueError("model must be on CUDA before autotuning")
-    if len(input_shape) != 5 or input_shape[0] != 1:
-        raise ValueError("autotuning requires a batch-one NCDHW input shape")
+    if len(input_shape) != 5 or input_shape[0] < 1:
+        raise ValueError("autotuning requires a positive-batch NCDHW input shape")
     if warmup < 1 or repetitions < 1:
         raise ValueError("warmup and repetitions must be positive")
 
@@ -412,11 +415,12 @@ def autotune_selections(
         seen.add(identity)
         if kind == "pointwise_gemm":
             native_ms, candidate_ms = _benchmark_pointwise(
-                shape[0], shape[1], shape[2:], dtype, warmup, repetitions
+                input_shape[0], shape[0], shape[1], shape[2:], dtype, warmup, repetitions
             )
         else:
             native_ms, candidate_ms = _benchmark_depthwise(
                 kind.removeprefix("depthwise_"),
+                input_shape[0],
                 shape[0],
                 shape[1],
                 dtype,

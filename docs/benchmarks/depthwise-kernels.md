@@ -163,5 +163,6 @@ created by the chosen MedNeXt variant, benchmarks each unique eligible pointwise
 and depthwise shape, and applies only the faster choices. An optional cache is
 keyed by GPU/software/dtype/input/model signature and selector source hash.
 Parameter objects and state-dict keys remain unchanged. The selector currently
-requires a CUDA model with batch one; downsample dX remains opt-in because its
-isolated gain did not yet translate to a full compiled-model gain.
+requires a CUDA model and benchmarks the requested positive batch size;
+downsample dX remains opt-in because its isolated gain did not yet translate to
+a full compiled-model gain.

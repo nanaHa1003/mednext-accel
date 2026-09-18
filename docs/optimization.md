@@ -21,11 +21,12 @@ model.compile(mode=report.compile_mode, fullgraph=True)
 ```
 
 `torch` disables all installed optional backends. `conservative` selects only
-the BF16, batch-one, 128-cubed depthwise configurations validated end to end on
-an SM 12.0 GPU. Other hardware and shapes stay on PyTorch. `autotune` measures
-each unique eligible shape on the current device. Its cache key includes model
-topology, device identity and capability, dtype, input shape, PyTorch, CUDA,
-cuDNN, Triton, package and kernel versions, and the planned compile mode.
+the BF16, 128-cubed depthwise configurations validated end to end across batch
+sizes on an SM 12.0 GPU. Other hardware and shapes stay on PyTorch. `autotune`
+measures each unique eligible shape using the requested batch size on the current
+device. Its cache key includes model topology, device identity and capability,
+dtype, input shape, PyTorch, CUDA, cuDNN, Triton, package and kernel versions,
+and the planned compile mode.
 
 The default cache is `~/.cache/mednext_accel/autotune-v1.json`, or beneath
 `XDG_CACHE_HOME` when set. Pass `cache_path=None` to disable it. Writes use an

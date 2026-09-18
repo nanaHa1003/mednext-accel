@@ -420,11 +420,12 @@ def depthwise_weight_grad_regular(
     weight_elements = channels * kernel_volume
     partial = torch.empty((weight_elements, splits), device=x.device, dtype=torch.float32)
     output = torch.empty((weight_elements,), device=x.device, dtype=x.dtype)
+    batch_size = x.shape[0]
     wrap_triton(_partial_dw_kernel)[(weight_elements, splits)](
         x,
         grad_output,
         partial,
-        N=1,
+        N=batch_size,
         C=channels,
         D=spatial_size,
         H=spatial_size,
@@ -456,12 +457,13 @@ def depthwise_input_grad_regular(
 ) -> torch.Tensor:
     """Compiled dX for one statically configured regular depthwise shape."""
     output = torch.empty_like(grad_output)
-    total = channels * spatial_size**3
+    batch_size = grad_output.shape[0]
+    total = batch_size * channels * spatial_size**3
     wrap_triton(_depthwise_input_grad_kernel)[(triton.cdiv(total, block),)](
         grad_output,
         weight,
         output,
-        N=1,
+        N=batch_size,
         C=channels,
         D=spatial_size,
         H=spatial_size,
@@ -479,18 +481,19 @@ def depthwise_input_grad_stride2_regular(
     grad_output: torch.Tensor, weight: torch.Tensor, channels: int, spatial_size: int, block: int
 ) -> torch.Tensor:
     """Compiled dX for one statically configured stride-two depthwise shape."""
+    batch_size = grad_output.shape[0]
     output = torch.empty(
-        (1, channels, spatial_size, spatial_size, spatial_size),
+        (batch_size, channels, spatial_size, spatial_size, spatial_size),
         device=grad_output.device,
         dtype=grad_output.dtype,
     )
     output_size = (spatial_size + 1) // 2
-    total = channels * spatial_size**3
+    total = batch_size * channels * spatial_size**3
     wrap_triton(_depthwise_stride2_input_grad_kernel)[(triton.cdiv(total, block),)](
         grad_output,
         weight,
         output,
-        N=1,
+        N=batch_size,
         C=channels,
         D=spatial_size,
         H=spatial_size,
@@ -648,11 +651,12 @@ def depthwise_transpose_weight_grad_regular(
     partial = torch.empty((weight_elements, splits), device=x.device, dtype=torch.float32)
     output = torch.empty((weight_elements,), device=x.device, dtype=x.dtype)
     output_size = 2 * spatial_size - 1
+    batch_size = x.shape[0]
     wrap_triton(_partial_transpose_dw_kernel)[(weight_elements, splits)](
         x,
         grad_output,
         partial,
-        N=1,
+        N=batch_size,
         C=channels,
         D=spatial_size,
         H=spatial_size,
@@ -796,7 +800,8 @@ class SplitDepthwiseConv3d(torch.nn.Module):
             and torch.is_grad_enabled()
             and config is not None
             and (self.selected_shapes is None or (x.shape[1], x.shape[2]) in self.selected_shapes)
-            and x.shape == (1, x.shape[1], x.shape[2], x.shape[2], x.shape[2])
+            and x.ndim == 5
+            and x.shape[2:] == (x.shape[2], x.shape[2], x.shape[2])
             and x.is_contiguous()
         ):
             # Custom operators are opaque to autocast. Match Conv3d's AMP
@@ -848,7 +853,8 @@ class SplitDepthwiseConvTranspose3d(torch.nn.Module):
             and torch.is_grad_enabled()
             and config is not None
             and (self.selected_shapes is None or (x.shape[1], x.shape[2]) in self.selected_shapes)
-            and x.shape == (1, x.shape[1], x.shape[2], x.shape[2], x.shape[2])
+            and x.ndim == 5
+            and x.shape[2:] == (x.shape[2], x.shape[2], x.shape[2])
             and x.is_contiguous()
         ):
             weight = self.weight.to(x.dtype)
@@ -896,7 +902,8 @@ class SplitDepthwiseDownsampleConv3d(torch.nn.Module):
             and torch.is_grad_enabled()
             and dx_block is not None
             and (self.selected_shapes is None or (x.shape[1], x.shape[2]) in self.selected_shapes)
-            and x.shape == (1, x.shape[1], x.shape[2], x.shape[2], x.shape[2])
+            and x.ndim == 5
+            and x.shape[2:] == (x.shape[2], x.shape[2], x.shape[2])
             and x.is_contiguous()
         ):
             weight = self.weight.to(x.dtype)

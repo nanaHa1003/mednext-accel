@@ -17,9 +17,10 @@ def test_autotune_benchmarks_each_unique_shape_once(
 ) -> None:
     import mednext_accel.optimization.autotune as tuning
 
-    calls: list[tuple[int, int, tuple[int, ...]]] = []
+    calls: list[tuple[int, int, int, tuple[int, ...]]] = []
 
     def fake_benchmark(
+        batch_size: int,
         in_channels: int,
         out_channels: int,
         spatial: tuple[int, ...],
@@ -27,7 +28,7 @@ def test_autotune_benchmarks_each_unique_shape_once(
         warmup: int,
         repetitions: int,
     ) -> tuple[float, float]:
-        calls.append((in_channels, out_channels, spatial))
+        calls.append((batch_size, in_channels, out_channels, spatial))
         return 2.0, 1.0
 
     monkeypatch.setattr(tuning, "_benchmark_pointwise", fake_benchmark)
@@ -35,14 +36,14 @@ def test_autotune_benchmarks_each_unique_shape_once(
 
     result = autotune_selections(
         model,
-        input_shape=(1, 2, 8, 8, 8),
+        input_shape=(3, 2, 8, 8, 8),
         dtype=torch.bfloat16,
         warmup=1,
         repetitions=1,
         cache_path=None,
     )
 
-    assert calls == [(2, 2, (8, 8, 8))]
+    assert calls == [(3, 2, 2, (8, 8, 8))]
     assert result.selections.pointwise_gemm == ((2, 2, 8, 8, 8),)
     assert len(result.measurements) == 1
 
@@ -83,7 +84,7 @@ def test_cache_hit_and_corruption_fallback(
     third = autotune_selections(model, **kwargs)
     assert calls == 2
     assert not third.cache_hit
-    assert json.loads(path.read_text())["version"] == 1
+    assert json.loads(path.read_text())["version"] == 2
 
 
 @pytest.mark.cuda

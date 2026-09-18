@@ -63,6 +63,12 @@ def test_conservative_table_is_limited_to_validated_blackwell_case() -> None:
         dtype=torch.bfloat16,
         input_shape=(1, 1, 128, 128, 128),
     )
+    batched = conservative_selections(
+        device_type="cuda",
+        capability=(12, 0),
+        dtype=torch.bfloat16,
+        input_shape=(4, 1, 128, 128, 128),
+    )
 
     assert selected.depthwise_regular == (
         (32, 128),
@@ -74,6 +80,7 @@ def test_conservative_table_is_limited_to_validated_blackwell_case() -> None:
     assert selected.depthwise_transpose == ((64, 64),)
     assert selected.pointwise_gemm == ()
     assert selected.depthwise_downsample == ()
+    assert batched == selected
     assert unsupported.is_empty
 
 
