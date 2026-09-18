@@ -189,20 +189,25 @@ Activations at successive resolutions shrink by approximately a factor of four
 because spatial volume falls by eight while channels double. This makes the
 `128^3` and `64^3` stages the first checkpoint candidates.
 
-### Proposed behavior
+### Implemented behavior
 
-Represent checkpoint selection as a model execution policy rather than hard
-coding stage indices inside blocks. Candidate selectors are:
+`checkpoint_levels` selects static architectural resolution levels while
+`checkpoint_style` selects the recomputation boundary:
 
-- All expanded branches.
-- Expanded branches at or above a spatial-volume threshold.
-- Explicit encoder, bottleneck, decoder, downsample, and upsample stage masks.
+```python
+mednext_base(
+    ...,
+    checkpoint_style="expanded",
+    checkpoint_levels=(0, 1),
+)
+```
 
-The first experiment should checkpoint only expanded branches at `128^3`, then
-`128^3 + 64^3`. A policy based on actual runtime spatial shape is convenient
-for fixed patches but can cause recompilation for dynamic shapes. A stage-based
-policy is more predictable for compiled models and should be preferred for the
-public interface.
+Level zero is full resolution and each increment is one factor-of-two spatial
+downsampling. `None` selects all levels, preserving the original `expanded`
+behavior. The tuple is validated and sorted at model construction. Selection
+uses the resolution at which the expansion branch operates, so encoder,
+decoder, downsample, and upsample blocks follow one definition without reading
+runtime tensor shapes.
 
 ### Compatibility requirements
 
@@ -216,6 +221,63 @@ public interface.
 Keep resolution-aware selection only if it provides a useful point between
 `none` and `expanded` on the Pareto curve. It should be removed if the added
 configuration surface yields negligible speed improvement.
+
+### RTX 5090 results
+
+The following results use the same RTX 5090, software environment, Base
+`128x128x128` BF16 workload, and measurement protocol as the implemented-policy
+validation above. Every entry is the median of three independent 50-step runs
+after 20 warmup steps. Time percentages and memory savings are relative to
+`none` for the same class count and operator path.
+
+Native convolution:
+
+| Classes | Policy | Selected levels | Step median ± SD | Time vs. none | Peak allocated | Memory saved |
+|---:|---|---|---:|---:|---:|---:|
+| 3 | none | none | 73.39 ± 1.19 ms | baseline | 8,426 MiB | baseline |
+| 3 | expanded | `(0,)` | 77.08 ± 1.03 ms | +5.0% | 5,883 MiB | 30.2% |
+| 3 | expanded | `(0, 1)` | 77.96 ± 0.05 ms | +6.2% | 4,447 MiB | 47.2% |
+| 3 | expanded | `(0, 1, 2)` | 78.35 ± 0.05 ms | +6.8% | 3,990 MiB | 52.6% |
+| 3 | expanded | all | 78.54 ± 0.06 ms | +7.0% | 3,852 MiB | 54.3% |
+| 3 | block | all blocks | 84.86 ± 0.03 ms | +15.6% | 3,285 MiB | 61.0% |
+| 8 | none | none | 74.98 ± 0.07 ms | baseline | 8,751 MiB | baseline |
+| 8 | expanded | `(0,)` | 78.66 ± 0.11 ms | +4.9% | 6,083 MiB | 30.5% |
+| 8 | expanded | `(0, 1)` | 79.70 ± 0.17 ms | +6.3% | 4,647 MiB | 46.9% |
+| 8 | expanded | `(0, 1, 2)` | 80.10 ± 0.07 ms | +6.8% | 4,190 MiB | 52.1% |
+| 8 | expanded | all | 80.35 ± 0.11 ms | +7.2% | 4,052 MiB | 53.7% |
+| 8 | block | all blocks | 86.77 ± 0.13 ms | +15.7% | 3,488 MiB | 60.1% |
+
+Pointwise-GEMM plus split-depthwise:
+
+| Classes | Policy | Selected levels | Step median ± SD | Time vs. none | Peak allocated | Memory saved |
+|---:|---|---|---:|---:|---:|---:|
+| 3 | none | none | 59.46 ± 0.04 ms | baseline | 8,375 MiB | baseline |
+| 3 | expanded | `(0,)` | 65.93 ± 0.07 ms | +10.9% | 5,946 MiB | 29.0% |
+| 3 | expanded | `(0, 1)` | 68.62 ± 0.05 ms | +15.4% | 4,510 MiB | 46.2% |
+| 3 | expanded | `(0, 1, 2)` | 69.04 ± 0.05 ms | +16.1% | 4,053 MiB | 51.6% |
+| 3 | expanded | all | 69.20 ± 0.03 ms | +16.4% | 3,914 MiB | 53.3% |
+| 3 | block | all blocks | 77.79 ± 0.11 ms | +30.8% | 3,345 MiB | 60.1% |
+| 8 | none | none | 61.03 ± 0.06 ms | baseline | 8,815 MiB | baseline |
+| 8 | expanded | `(0,)` | 67.57 ± 0.06 ms | +10.7% | 6,149 MiB | 30.2% |
+| 8 | expanded | `(0, 1)` | 70.33 ± 0.08 ms | +15.2% | 4,713 MiB | 46.5% |
+| 8 | expanded | `(0, 1, 2)` | 70.77 ± 0.08 ms | +16.0% | 4,255 MiB | 51.7% |
+| 8 | expanded | all | 71.04 ± 0.03 ms | +16.4% | 4,117 MiB | 53.3% |
+| 8 | block | all blocks | 79.46 ± 0.08 ms | +30.2% | 3,548 MiB | 59.8% |
+
+All sampled settings are strict Pareto points: each additional level trades
+some time for lower peak allocation. The most useful practical choices are:
+
+- `(0,)` when a roughly 30% memory reduction is sufficient;
+- `(0, 1)` when approximately 46--47% is needed;
+- all expanded levels when maximum selective-checkpoint memory reduction is
+  preferred.
+
+Adding level 1 after level 0 removes approximately another 1.4 GiB. Adding
+level 2 removes approximately 457 MiB. Checkpointing the remaining levels
+removes only about 138 MiB, so `(0, 1, 2)` and all-level execution are close in
+both time and memory. The tuple API retains every choice without adding preset
+names. Portability measurements on L40S, RTX A6000, and RTX 8000 remain
+outstanding.
 
 ## 3. Fused 3D GRN
 
