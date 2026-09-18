@@ -13,9 +13,7 @@ def test_base_config_matches_official_v1() -> None:
 
 
 def test_monai_base_config_records_its_downsample_difference() -> None:
-    config = get_mednext_v1_config(
-        "base", in_channels=1, out_channels=3, compatibility="monai"
-    )
+    config = get_mednext_v1_config("base", in_channels=1, out_channels=3, compatibility="monai")
 
     assert config.downsample_expansion_ratios == (2, 3, 4, 4)
 
@@ -29,9 +27,7 @@ def test_monai_base_config_records_its_downsample_difference() -> None:
         ((1.0,), "integers"),
     ],
 )
-def test_checkpoint_stages_are_validated(
-    stages: tuple[int, ...], message: str
-) -> None:
+def test_checkpoint_stages_are_validated(stages: tuple[int, ...], message: str) -> None:
     with pytest.raises(ValueError, match=message):
         CheckpointConfig(stages=stages)
 

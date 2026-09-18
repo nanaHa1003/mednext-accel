@@ -7,6 +7,7 @@ import sys
 import pytest
 import torch
 from torch import nn
+from torch.nn import functional as F
 
 from mednext_accel.ops.depthwise import replace_depthwise_convs
 
@@ -39,9 +40,7 @@ def test_replacement_preserves_parameters_and_state_dict_paths() -> None:
 
 
 def test_stride_two_downsample_is_explicitly_selected() -> None:
-    native = nn.Sequential(
-        nn.Conv3d(32, 32, 3, stride=2, padding=1, groups=32)
-    )
+    native = nn.Sequential(nn.Conv3d(32, 32, 3, stride=2, padding=1, groups=32))
     selected = copy.deepcopy(native)
 
     assert replace_depthwise_convs(native) == 0
@@ -49,9 +48,7 @@ def test_stride_two_downsample_is_explicitly_selected() -> None:
 
 
 def test_stride_two_transpose_is_selected() -> None:
-    model = nn.Sequential(
-        nn.ConvTranspose3d(64, 64, 3, stride=2, padding=1, groups=64)
-    )
+    model = nn.Sequential(nn.ConvTranspose3d(64, 64, 3, stride=2, padding=1, groups=64))
 
     assert replace_depthwise_convs(model) == 1
 
@@ -84,14 +81,12 @@ def test_eval_uses_traceable_native_convolution(monkeypatch: pytest.MonkeyPatch)
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
 def test_regular_wrapper_matches_forward_and_all_gradients() -> None:
     torch.manual_seed(5)
-    original = nn.Sequential(
-        nn.Conv3d(128, 128, 3, padding=1, groups=128)
-    ).cuda().to(torch.bfloat16)
+    original = (
+        nn.Sequential(nn.Conv3d(128, 128, 3, padding=1, groups=128)).cuda().to(torch.bfloat16)
+    )
     candidate = copy.deepcopy(original)
     replace_depthwise_convs(candidate)
-    x = torch.randn(
-        1, 128, 32, 32, 32, device="cuda", dtype=torch.bfloat16, requires_grad=True
-    )
+    x = torch.randn(1, 128, 32, 32, 32, device="cuda", dtype=torch.bfloat16, requires_grad=True)
     z = x.detach().clone().requires_grad_()
 
     expected, actual = original(x), candidate(z)
@@ -105,11 +100,10 @@ def test_regular_wrapper_matches_forward_and_all_gradients() -> None:
         *torch.autograd.grad(actual, (z, *candidate.parameters()), gradient),
     )
 
-    for actual_tensor, expected_tensor in zip(actual_all, expected_all):
+    for actual_tensor, expected_tensor in zip(actual_all, expected_all, strict=True):
         relative_error = (
-            (actual_tensor.float() - expected_tensor.float()).norm()
-            / expected_tensor.float().norm().clamp_min(1e-12)
-        )
+            actual_tensor.float() - expected_tensor.float()
+        ).norm() / expected_tensor.float().norm().clamp_min(1e-12)
         assert relative_error.item() < 0.01
 
 
@@ -134,3 +128,71 @@ def test_custom_operator_registration_with_opcheck() -> None:
         "test_autograd_registration": "SUCCESS",
         "test_faketensor": "SUCCESS",
     }
+
+
+@pytest.mark.cuda
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.parametrize("kernel_size", [1, 3, 5])
+def test_low_level_regular_gradients_against_double_precision(kernel_size: int) -> None:
+    from mednext_accel.ops._triton.depthwise import (
+        depthwise_input_grad,
+        depthwise_weight_grad,
+    )
+
+    torch.manual_seed(17 + kernel_size)
+    x = torch.randn(2, 3, 5, 6, 7, device="cuda", dtype=torch.float64, requires_grad=True)
+    weight = torch.randn(
+        3,
+        1,
+        kernel_size,
+        kernel_size,
+        kernel_size,
+        device="cuda",
+        dtype=torch.float64,
+        requires_grad=True,
+    )
+    output = F.conv3d(x, weight, padding=kernel_size // 2, groups=3)
+    gradient = torch.randn_like(output)
+    expected_input, expected_weight = torch.autograd.grad(output, (x, weight), gradient)
+
+    actual_input = depthwise_input_grad(gradient, weight.detach(), block=128)
+    actual_weight = depthwise_weight_grad(
+        x.detach(), gradient, splits=4, block=128, kernel_size=kernel_size
+    )
+
+    torch.testing.assert_close(actual_input, expected_input, rtol=2e-12, atol=2e-12)
+    torch.testing.assert_close(actual_weight, expected_weight, rtol=2e-5, atol=2e-5)
+
+
+@pytest.mark.cuda
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+def test_low_level_stride_two_input_gradient_against_double_precision() -> None:
+    from mednext_accel.ops._triton.depthwise import depthwise_stride2_input_grad
+
+    torch.manual_seed(47)
+    x = torch.randn(2, 3, 5, 6, 7, device="cuda", dtype=torch.float64, requires_grad=True)
+    weight = torch.randn(3, 1, 3, 3, 3, device="cuda", dtype=torch.float64)
+    output = F.conv3d(x, weight, stride=2, padding=1, groups=3)
+    gradient = torch.randn_like(output)
+    (expected,) = torch.autograd.grad(output, x, gradient)
+
+    actual = depthwise_stride2_input_grad(gradient, weight, x.shape[2:], block=128)
+
+    torch.testing.assert_close(actual, expected, rtol=2e-12, atol=2e-12)
+
+
+@pytest.mark.cuda
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+def test_low_level_transpose_weight_gradient_against_double_precision() -> None:
+    from mednext_accel.ops._triton.depthwise import depthwise_transpose_weight_grad
+
+    torch.manual_seed(41)
+    x = torch.randn(2, 3, 4, 5, 6, device="cuda", dtype=torch.float64)
+    weight = torch.randn(3, 1, 3, 3, 3, device="cuda", dtype=torch.float64, requires_grad=True)
+    output = F.conv_transpose3d(x, weight, stride=2, padding=1, groups=3)
+    gradient = torch.randn_like(output)
+    (expected,) = torch.autograd.grad(output, weight, gradient)
+
+    actual = depthwise_transpose_weight_grad(x, gradient, splits=4, block=128)
+
+    torch.testing.assert_close(actual, expected, rtol=2e-12, atol=2e-12)

@@ -80,9 +80,7 @@ def test_conservative_table_is_limited_to_validated_blackwell_case() -> None:
 @pytest.mark.cuda
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
 def test_conservative_policy_preserves_parameters_and_can_restore_torch() -> None:
-    model = nn.Sequential(
-        nn.Conv3d(32, 32, 3, padding=1, groups=32)
-    ).cuda()
+    model = nn.Sequential(nn.Conv3d(32, 32, 3, padding=1, groups=32)).cuda()
     parameters = tuple(model.parameters())
     keys = tuple(model.state_dict())
 
@@ -107,11 +105,7 @@ def test_conservative_policy_preserves_parameters_and_can_restore_torch() -> Non
 def test_backend_context_restores_policy_after_exception() -> None:
     from mednext_accel.ops.pointwise import GemmPointwise3d
 
-    model = nn.Sequential(
-        GemmPointwise3d(
-            nn.Conv3d(2, 4, 1), selected_shapes={(2, 4, 8, 8, 8)}
-        )
-    )
+    model = nn.Sequential(GemmPointwise3d(nn.Conv3d(2, 4, 1), selected_shapes={(2, 4, 8, 8, 8)}))
     original = copy.copy(model[0].selected_shapes)
 
     with pytest.raises(RuntimeError, match="stop"):

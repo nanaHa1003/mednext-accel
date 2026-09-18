@@ -116,7 +116,7 @@ def test_checkpoint_policy_preserves_state_and_gradients() -> None:
     torch.testing.assert_close(checkpointed_output, reference_output)
     torch.testing.assert_close(checkpointed_input.grad, reference_input.grad)
     assert checkpointed.state_dict().keys() == reference.state_dict().keys()
-    for expected, actual in zip(reference.parameters(), checkpointed.parameters()):
+    for expected, actual in zip(reference.parameters(), checkpointed.parameters(), strict=True):
         torch.testing.assert_close(actual.grad, expected.grad)
 
 

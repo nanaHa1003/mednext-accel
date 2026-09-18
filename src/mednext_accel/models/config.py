@@ -96,4 +96,3 @@ def get_mednext_v1_config(
         compatibility=compatibility,
         deep_supervision=deep_supervision,
     )
-

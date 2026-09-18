@@ -1,14 +1,15 @@
 from __future__ import annotations
 
+import inspect
+
 import pytest
 import torch
-
-monai = pytest.importorskip("monai")
-from monai.networks.nets import MedNeXt as MonaiMedNeXt
 
 from mednext_accel import mednext_base
 from mednext_accel.checkpoints import load_checkpoint
 from mednext_accel.compat.monai import monai_mednext_base, monai_mednext_small
+
+MonaiMedNeXt = pytest.importorskip("monai.networks.nets").MedNeXt
 
 
 def _monai_small(*, deep_supervision: bool = False) -> MonaiMedNeXt:
@@ -75,3 +76,13 @@ def test_monai_base_checkpoint_is_rejected_by_official_base_architecture() -> No
 
     with pytest.raises(ValueError, match=r"down_0.*down_1"):
         load_checkpoint(official, monai_compatible.state_dict(), source="monai")
+
+
+def test_compatibility_factory_has_discoverable_keyword_signature() -> None:
+    signature = inspect.signature(monai_mednext_base)
+
+    assert list(signature.parameters)[:2] == ["in_channels", "out_channels"]
+    assert all(
+        parameter.kind is inspect.Parameter.KEYWORD_ONLY
+        for parameter in signature.parameters.values()
+    )

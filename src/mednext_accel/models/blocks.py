@@ -9,7 +9,6 @@ from torch import Tensor, nn
 from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint
 
-
 ConvType: TypeAlias = type[nn.Conv2d] | type[nn.Conv3d]
 ConvTransposeType: TypeAlias = type[nn.ConvTranspose2d] | type[nn.ConvTranspose3d]
 
@@ -172,9 +171,7 @@ class MedNeXtUpBlock(MedNeXtBlock):
             groups=in_channels,
         )
         self.residual = (
-            conv_transpose(in_channels, out_channels, kernel_size=1, stride=2)
-            if residual
-            else None
+            conv_transpose(in_channels, out_channels, kernel_size=1, stride=2) if residual else None
         )
         self._pad = (1, 0) * spatial_dims
 

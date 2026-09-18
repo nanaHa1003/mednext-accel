@@ -6,8 +6,8 @@ import pytest
 import torch
 from torch import nn
 
-from mednext_accel.optimization.autotune import autotune_selections
 from mednext_accel.ops.pointwise import replace_pointwise_convs
+from mednext_accel.optimization.autotune import autotune_selections
 
 
 @pytest.mark.cuda

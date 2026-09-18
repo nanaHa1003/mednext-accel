@@ -31,4 +31,3 @@ class CheckpointConfig:
         """Return whether the expansion branch at ``stage`` is checkpointed."""
 
         return self.expansion and (self.stages is None or stage in self.stages)
-

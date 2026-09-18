@@ -15,7 +15,7 @@ from torch import Tensor, nn
 from ..models.config import MedNeXtV1Config
 from . import monai, official_v1
 
-CheckpointSource = Literal["auto", "native", "official_v1", "monai"]
+CheckpointSource = Literal["auto", "native", "official-v1", "official_v1", "monai"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,8 +59,12 @@ def _convert(
 ) -> tuple[OrderedDict[str, Tensor], str, tuple[str, ...]]:
     stripped = OrderedDict((_strip_wrapper_prefix(key), value) for key, value in state_dict.items())
     resolved = _detect_source(list(stripped)) if source == "auto" else source
+    if resolved == "official-v1":
+        resolved = "official_v1"
     if resolved not in ("native", "official_v1", "monai"):
-        raise ValueError("source must be 'auto', 'native', 'official_v1', or 'monai'")
+        raise ValueError(
+            "source must be 'auto', 'native', 'official-v1', 'official_v1', or 'monai'"
+        )
 
     converted: OrderedDict[str, Tensor] = OrderedDict()
     ignored: list[str] = []
@@ -118,9 +122,7 @@ def _extract_state_dict(
         return cast(Mapping[str, Tensor], checkpoint)
     for key in ("state_dict", "model_state_dict", "network_weights", "model"):
         value = checkpoint.get(key)
-        if isinstance(value, Mapping) and all(
-            isinstance(item, Tensor) for item in value.values()
-        ):
+        if isinstance(value, Mapping) and all(isinstance(item, Tensor) for item in value.values()):
             return cast(Mapping[str, Tensor], value)
     raise ValueError("checkpoint does not contain a recognizable tensor state dict")
 

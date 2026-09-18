@@ -6,9 +6,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 OptimizationPolicy = Literal["torch", "conservative", "autotune"]
-CompileMode = Literal[
-    "default", "reduce-overhead", "max-autotune", "max-autotune-no-cudagraphs"
-]
+CompileMode = Literal["default", "reduce-overhead", "max-autotune", "max-autotune-no-cudagraphs"]
 
 
 @dataclass(frozen=True, slots=True)

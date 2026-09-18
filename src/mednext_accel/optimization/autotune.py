@@ -43,9 +43,7 @@ def _benchmark_pointwise(
     repetitions: int,
 ) -> tuple[float, float]:
     x = torch.randn((1, in_channels, *spatial), device="cuda", dtype=dtype)
-    weight = torch.randn(
-        (out_channels, in_channels, 1, 1, 1), device="cuda", dtype=dtype
-    )
+    weight = torch.randn((out_channels, in_channels, 1, 1, 1), device="cuda", dtype=dtype)
     bias = torch.randn((out_channels,), device="cuda", dtype=dtype)
     gradient = torch.randn((1, out_channels, *spatial), device="cuda", dtype=dtype)
 
@@ -86,24 +84,26 @@ def _benchmark_depthwise(
 ) -> tuple[float, float]:
     from ..ops._triton import depthwise as backend
 
-    x = torch.randn(
-        (1, channels, spatial, spatial, spatial), device="cuda", dtype=dtype
-    )
+    x = torch.randn((1, channels, spatial, spatial, spatial), device="cuda", dtype=dtype)
     weight = torch.randn((channels, 1, 3, 3, 3), device="cuda", dtype=dtype)
     bias = torch.randn((channels,), device="cuda", dtype=dtype)
     if kind == "regular":
         gradient_shape = (spatial,) * 3
-        forward = lambda: F.conv3d(x, weight, bias, padding=1, groups=channels)
+
+        def forward() -> Tensor:
+            return F.conv3d(x, weight, bias, padding=1, groups=channels)
+
     elif kind == "transpose":
         gradient_shape = (2 * spatial - 1,) * 3
-        forward = lambda: F.conv_transpose3d(
-            x, weight, bias, stride=2, padding=1, groups=channels
-        )
+
+        def forward() -> Tensor:
+            return F.conv_transpose3d(x, weight, bias, stride=2, padding=1, groups=channels)
+
     elif kind == "downsample":
         gradient_shape = ((spatial + 1) // 2,) * 3
-        forward = lambda: F.conv3d(
-            x, weight, bias, stride=2, padding=1, groups=channels
-        )
+
+        def forward() -> Tensor:
+            return F.conv3d(x, weight, bias, stride=2, padding=1, groups=channels)
     else:
         raise ValueError(f"unknown depthwise kind {kind!r}")
     gradient = torch.randn((1, channels, *gradient_shape), device="cuda", dtype=dtype)
@@ -158,9 +158,7 @@ def _benchmark_depthwise(
 
         def candidate() -> None:
             forward()
-            backend.depthwise_stride2_input_grad(
-                gradient, weight, (spatial,) * 3, block=dx_block
-            )
+            backend.depthwise_stride2_input_grad(gradient, weight, (spatial,) * 3, block=dx_block)
             torch.ops.aten.convolution_backward(
                 gradient,
                 x,
@@ -193,9 +191,10 @@ def _capture_shapes(
         return record
 
     for name, module in model.named_modules():
-        if type(module) in (nn.Conv3d, nn.ConvTranspose3d) or getattr(
-            module, "_mednext_accel_backend_kind", None
-        ) is not None:
+        if (
+            type(module) in (nn.Conv3d, nn.ConvTranspose3d)
+            or getattr(module, "_mednext_accel_backend_kind", None) is not None
+        ):
             handles.append(module.register_forward_pre_hook(hook(name)))
     training_states = {module: module.training for module in model.modules()}
     model.eval()
@@ -369,7 +368,6 @@ def autotune_selections(
     for _, module, spatial in records:
         kind: str | None = None
         shape: tuple[int, ...]
-        benchmark: Any
         wrapper_kind = getattr(module, "_mednext_accel_backend_kind", None)
         if wrapper_kind == "pointwise_gemm" or (
             type(module) is nn.Conv3d
@@ -379,14 +377,6 @@ def autotune_selections(
         ):
             kind = "pointwise_gemm"
             shape = (module.in_channels, module.out_channels, *spatial)
-            benchmark = lambda: _benchmark_pointwise(
-                module.in_channels,
-                module.out_channels,
-                spatial,
-                dtype,
-                warmup,
-                repetitions,
-            )
         elif wrapper_kind == "depthwise_regular" or (
             type(module) is nn.Conv3d
             and module.groups == module.in_channels == module.out_channels
@@ -395,9 +385,6 @@ def autotune_selections(
         ):
             kind = "depthwise_regular"
             shape = (module.in_channels, spatial[0])
-            benchmark = lambda: _benchmark_depthwise(
-                "regular", *shape, dtype, warmup, repetitions
-            )
         elif wrapper_kind == "depthwise_transpose" or (
             type(module) is nn.ConvTranspose3d
             and module.groups == module.in_channels == module.out_channels
@@ -406,9 +393,6 @@ def autotune_selections(
         ):
             kind = "depthwise_transpose"
             shape = (module.in_channels, spatial[0])
-            benchmark = lambda: _benchmark_depthwise(
-                "transpose", *shape, dtype, warmup, repetitions
-            )
         elif include_stride2_input_grad and (
             wrapper_kind == "depthwise_downsample"
             or (
@@ -420,20 +404,27 @@ def autotune_selections(
         ):
             kind = "depthwise_downsample"
             shape = (module.in_channels, spatial[0])
-            benchmark = lambda: _benchmark_depthwise(
-                "downsample", *shape, dtype, warmup, repetitions
-            )
         else:
             continue
         identity = (kind, *shape)
         if identity in seen:
             continue
         seen.add(identity)
-        native_ms, candidate_ms = benchmark()
+        if kind == "pointwise_gemm":
+            native_ms, candidate_ms = _benchmark_pointwise(
+                shape[0], shape[1], shape[2:], dtype, warmup, repetitions
+            )
+        else:
+            native_ms, candidate_ms = _benchmark_depthwise(
+                kind.removeprefix("depthwise_"),
+                shape[0],
+                shape[1],
+                dtype,
+                warmup,
+                repetitions,
+            )
         use_candidate = native_ms / candidate_ms >= minimum_speedup
-        measurements.append(
-            KernelMeasurement(kind, shape, native_ms, candidate_ms, use_candidate)
-        )
+        measurements.append(KernelMeasurement(kind, shape, native_ms, candidate_ms, use_candidate))
         if use_candidate:
             selected[kind].add(shape)
 

@@ -31,9 +31,7 @@ class GemmPointwise3d(nn.Module):
         self.padding = conv.padding
         self.dilation = conv.dilation
         self.groups = conv.groups
-        self.selected_shapes = (
-            None if selected_shapes is None else frozenset(selected_shapes)
-        )
+        self.selected_shapes = None if selected_shapes is None else frozenset(selected_shapes)
         self.train(conv.training)
 
     def forward(self, x: Tensor) -> Tensor:

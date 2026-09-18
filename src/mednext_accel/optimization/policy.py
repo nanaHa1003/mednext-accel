@@ -6,7 +6,6 @@ import torch
 
 from .report import BackendSelections
 
-
 _BLACKWELL_REGULAR = (
     (32, 128),
     (64, 64),

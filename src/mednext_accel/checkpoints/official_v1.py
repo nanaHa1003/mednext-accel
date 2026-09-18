@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import re
 
-
 _COMPONENTS = {
     "conv1": "depthwise",
     "conv2": "expand",
@@ -33,9 +32,7 @@ def convert_key(key: str) -> str | None:
             else:
                 match = re.match(r"dec_block_([0-3])\.(.+)", key)
                 if match:
-                    key = (
-                        f"decoder_stages.{3 - int(match.group(1))}.{match.group(2)}"
-                    )
+                    key = f"decoder_stages.{3 - int(match.group(1))}.{match.group(2)}"
                 else:
                     match = re.match(r"out_([0-4])\.conv_out\.(.+)", key)
                     if match:

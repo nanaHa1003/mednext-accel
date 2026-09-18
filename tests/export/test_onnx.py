@@ -4,12 +4,12 @@ import numpy as np
 import pytest
 import torch
 
+from mednext_accel import mednext_small
+from mednext_accel.export import export_onnx
+
 onnx = pytest.importorskip("onnx")
 ort = pytest.importorskip("onnxruntime")
 pytest.importorskip("onnxscript")
-
-from mednext_accel import mednext_small
-from mednext_accel.export import export_onnx
 
 
 @pytest.mark.onnx

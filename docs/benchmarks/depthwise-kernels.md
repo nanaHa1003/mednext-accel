@@ -91,7 +91,7 @@ For 5x5x5, the generic split kernel measured 3.711 ms versus 14.260 ms for ATen
 The 64-split FP32 scratch buffer grows from 0.211 MiB at 3x3x3 to 0.977 MiB at
 5x5x5; measured peak model allocation was effectively unchanged.
 
-See `profile_results/depthwise_split/REPORT.md` for ranges and test scope.
+Raw profiler artifacts are intentionally excluded from the repository; use the current scripts under `benchmarks/` and `tools/` to reproduce a matched run.
 
 The next regular resolution also benefits in isolation. At `[1,64,64,64,64]` with
 64 channels and a 3x3x3 kernel, ATen dW measured 0.720 ms and the best split launch

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Iterator
 from contextlib import contextmanager
-import os
 from os import PathLike
 from pathlib import Path
 
@@ -36,6 +36,9 @@ def _default_cache_path() -> Path:
     return cache_root / "mednext_accel" / "autotune-v1.json"
 
 
+_DEFAULT_CACHE_PATH = _default_cache_path()
+
+
 def _device(model: nn.Module) -> torch.device:
     try:
         return next(model.parameters()).device
@@ -53,9 +56,7 @@ def _set_selections(model: nn.Module, selections: BackendSelections) -> None:
 def _apply_selections(model: nn.Module, selections: BackendSelections) -> int:
     replacements = 0
     if selections.pointwise_gemm:
-        replacements += replace_pointwise_convs(
-            model, selected_shapes=selections.pointwise_gemm
-        )
+        replacements += replace_pointwise_convs(model, selected_shapes=selections.pointwise_gemm)
     if any(
         (
             selections.depthwise_regular,
@@ -83,7 +84,7 @@ def optimize(
     dtype: torch.dtype,
     policy: OptimizationPolicy,
     compile_mode: CompileMode = "default",
-    cache_path: str | PathLike[str] | None = _default_cache_path(),
+    cache_path: str | PathLike[str] | None = _DEFAULT_CACHE_PATH,
     warmup: int = 10,
     repetitions: int = 50,
     include_stride2_input_grad: bool = False,
@@ -164,5 +165,5 @@ def use_backend(model: nn.Module, backend: str) -> Iterator[nn.Module]:
             module.selected_shapes = frozenset()
         yield model
     finally:
-        for module, selected_shapes in zip(wrappers, previous):
+        for module, selected_shapes in zip(wrappers, previous, strict=True):
             module.selected_shapes = selected_shapes

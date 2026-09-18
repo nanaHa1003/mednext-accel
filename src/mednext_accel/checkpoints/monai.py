@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import re
 
-
 _COMPONENTS = {
     "conv1": "depthwise",
     "conv2": "expand",

@@ -29,10 +29,6 @@ monai = ["monai>=1.5"]
 test = ["pytest>=8"]
 dev = ["build>=1.2", "pytest>=8", "ruff>=0.8", "twine>=5"]
 
-[project.urls]
-Repository = "https://github.com/placeholder/mednext-accel"
-Issues = "https://github.com/placeholder/mednext-accel/issues"
-
 [tool.hatch.build.targets.wheel]
 packages = ["src/mednext_accel"]
 
@@ -50,4 +46,3 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
-

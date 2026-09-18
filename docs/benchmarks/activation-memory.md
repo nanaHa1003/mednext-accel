@@ -150,10 +150,9 @@ directly.
 - Compose with native and custom depthwise operators.
 - Treat this as an execution policy, not a new model variant.
 
-The public `checkpoint_style` values are `none`, `expanded`, and `block`.
-The legacy `use_grad_checkpoint=True` setting retains its original whole-block
-meaning and resolves to `block`. Supplying that legacy setting together with
-an explicit policy raises `ValueError` instead of choosing silently.
+The production package exposes expansion-branch checkpointing through
+`CheckpointConfig`. Whole-block checkpointing was retained only as an
+experimental comparison and is not part of the package API.
 
 Unit coverage verifies exact double-precision output, input-gradient, and
 parameter-gradient parity for normal, downsample, and upsample blocks. It also
@@ -191,14 +190,12 @@ because spatial volume falls by eight while channels double. This makes the
 
 ### Implemented behavior
 
-`checkpoint_levels` selects static architectural resolution levels while
-`checkpoint_style` selects the recomputation boundary:
+`CheckpointConfig.stages` selects static architectural resolution levels:
 
 ```python
 mednext_base(
     ...,
-    checkpoint_style="expanded",
-    checkpoint_levels=(0, 1),
+    checkpointing=CheckpointConfig(stages=(0, 1)),
 )
 ```
 

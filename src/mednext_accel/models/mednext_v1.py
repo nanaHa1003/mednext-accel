@@ -28,9 +28,7 @@ class MedNeXtV1(nn.Module):
     ) -> None:
         super().__init__()
         if deep_supervision_output not in ("tuple", "list", "stacked"):
-            raise ValueError(
-                "deep_supervision_output must be 'tuple', 'list', or 'stacked'"
-            )
+            raise ValueError("deep_supervision_output must be 'tuple', 'list', or 'stacked'")
         self.config = config
         self.checkpointing = checkpointing
         self.deep_supervision_output = deep_supervision_output
@@ -98,7 +96,7 @@ class MedNeXtV1(nn.Module):
         decoder_config_indices = (5, 6, 7, 8)
         self.upsamples = nn.ModuleList()
         self.decoder_stages = nn.ModuleList()
-        for stage, config_index in zip(decoder_stages, decoder_config_indices):
+        for stage, config_index in zip(decoder_stages, decoder_config_indices, strict=True):
             ratio = config.expansion_ratios[config_index]
             self.upsamples.append(
                 MedNeXtUpBlock(
@@ -149,7 +147,7 @@ class MedNeXtV1(nn.Module):
     def forward(self, x: Tensor) -> Tensor | tuple[Tensor, ...] | list[Tensor]:
         x = self.stem(x)
         skips: list[Tensor] = []
-        for encoder, downsample in zip(self.encoder_stages, self.downsamples):
+        for encoder, downsample in zip(self.encoder_stages, self.downsamples, strict=True):
             x = encoder(x)
             skips.append(x)
             x = downsample(x)
@@ -157,7 +155,7 @@ class MedNeXtV1(nn.Module):
         x = self.bottleneck(x)
         auxiliary: list[Tensor] = []
         for index, (upsample, decoder) in enumerate(
-            zip(self.upsamples, self.decoder_stages)
+            zip(self.upsamples, self.decoder_stages, strict=True)
         ):
             if self.training and self.config.deep_supervision:
                 auxiliary.append(self.deep_supervision_heads[index](x))

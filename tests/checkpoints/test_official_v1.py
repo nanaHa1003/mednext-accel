@@ -7,7 +7,6 @@ import torch
 from mednext_accel import mednext_small
 from mednext_accel.checkpoints import convert_state_dict, load_checkpoint
 
-
 _BLOCK_PARTS = {
     "depthwise": "conv1",
     "expand": "conv2",
@@ -57,6 +56,15 @@ def test_official_conversion_maps_all_keys_and_ignores_dummy_tensor() -> None:
         torch.testing.assert_close(converted[key], expected)
 
 
+def test_official_source_accepts_hyphenated_public_spelling() -> None:
+    model = mednext_small(in_channels=1, out_channels=3, base_channels=2)
+    official = _native_to_official(model.state_dict())
+
+    converted = convert_state_dict(official, source="official-v1", target_config=model.config)
+
+    assert converted.keys() == model.state_dict().keys()
+
+
 def test_wrapped_official_checkpoint_loads_with_exact_output() -> None:
     torch.manual_seed(12)
     source = mednext_small(in_channels=1, out_channels=3, base_channels=2).eval()
@@ -82,5 +90,5 @@ def test_torch_compile_wrapper_checkpoint_loads_into_eager_model() -> None:
     report = load_checkpoint(target, compiled.state_dict(), source="auto")
 
     assert report.source == "native"
-    for actual, expected in zip(target.parameters(), source.parameters()):
+    for actual, expected in zip(target.parameters(), source.parameters(), strict=True):
         torch.testing.assert_close(actual, expected, rtol=0, atol=0)
