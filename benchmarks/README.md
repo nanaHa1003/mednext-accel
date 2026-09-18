@@ -14,6 +14,11 @@ python benchmarks/depthwise.py \
 
 python benchmarks/pointwise.py \
   --in-channels 32 --out-channels 96 --spatial 64 64 64
+
+# Direct official/MONAI/package comparison (requires an official checkout)
+python benchmarks/implementations.py \
+  --official-root /tmp/MedNeXt-official \
+  --output artifacts/implementation-comparison.json
 ```
 
 Run benchmarks on an otherwise idle GPU. Record the GPU, driver, PyTorch, CUDA,

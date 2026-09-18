@@ -36,28 +36,47 @@ keep the same parameters and state-dict paths as the PyTorch implementation.
 
 ### RTX 5090 training results
 
-The table below isolates the execution-policy changes using the same
-official-compatible MedNeXt Base architecture. Measurements use an RTX 5090,
-PyTorch 2.12.0+cu132, CUDA 13.2, cuDNN 9.20, BF16 autocast, batch size one,
-`128x128x128` input, three classes, deep supervision, AdamW, and
-`torch.compile`. Each value is the median of three independent 50-step runs
-after 20 warmup steps. Memory is peak PyTorch allocation.
+This is a direct model-level comparison against official MedNeXt commit
+`0b78ed8` and MONAI 1.5.2. The workload is MedNeXt Base, an RTX 5090, PyTorch
+2.12.0+cu132, CUDA 13.2, cuDNN 9.20, BF16 autocast, batch size one,
+`128x128x128` input, three classes, five-head deep supervision, mean cross
+entropy, and AdamW. Each value is the median of three independent 50-step runs
+after 20 warmup steps. Compilation uses
+`torch.compile(mode="default", fullgraph=True)`; memory is peak PyTorch
+allocation.
 
-| Execution policy | Checkpointed stages | Step time | Change vs. native | Peak allocated | Change vs. native |
-|---|---:|---:|---:|---:|---:|
-| Native PyTorch convolutions | None | 73.39 ms | baseline | 8,426 MiB | baseline |
-| Custom operators | None | **59.46 ms** | **19.0% less time / 1.23x throughput** | 8,375 MiB | 0.6% lower |
-| Custom operators + selective checkpointing | `(0,)` | **65.93 ms** | **10.2% less time** | **5,946 MiB** | **29.4% lower** |
-| Custom operators + selective checkpointing | `(0, 1)` | **68.62 ms** | **6.5% less time** | **4,510 MiB** | **46.5% lower** |
-| Custom operators + selective checkpointing | All expansion stages | **69.20 ms** | **5.7% less time** | **3,914 MiB** | **53.6% lower** |
+| Implementation and policy | Compiled | Checkpointing | Parameters | Step time | Peak allocated |
+|---|---:|---|---:|---:|---:|
+| Official MedNeXt v1 Base | No | None | 10,529,232¹ | 100.01 ms | 9,358 MiB |
+| MONAI MedNeXt Base | No | None | 10,513,775² | 99.78 ms | 9,318 MiB |
+| MedNeXt-Accel, PyTorch reference | No | None | 10,529,231 | 99.96 ms | 9,355 MiB |
+| **MedNeXt-Accel, optimized** | No | None | 10,529,231 | **85.66 ms** | 9,355 MiB |
+| Official MedNeXt v1 Base | Yes | None | 10,529,232¹ | 73.98 ms | 8,339 MiB |
+| MONAI MedNeXt Base | Yes | None | 10,513,775² | 73.84 ms | 8,298 MiB |
+| MedNeXt-Accel, PyTorch reference | Yes | None | 10,529,231 | 74.06 ms | 8,339 MiB |
+| **MedNeXt-Accel, optimized** | Yes | None | 10,529,231 | **59.46 ms** | 8,339 MiB |
+| Official MedNeXt v1 Base | Yes | Whole block | 10,529,232¹ | 85.16 ms | **3,236 MiB** |
+| **MedNeXt-Accel, optimized** | Yes | Expansion stage `(0,)` | 10,529,231 | **62.83 ms** | 5,795 MiB |
+| **MedNeXt-Accel, optimized** | Yes | Expansion stages `(0, 1)` | 10,529,231 | **63.98 ms** | 4,359 MiB |
+| **MedNeXt-Accel, optimized** | Yes | All expansion stages | 10,529,231 | **64.29 ms** | **3,763 MiB** |
 
-These results compare optimized and native execution inside this package, rather
-than timing the full nnU-Net or MONAI frameworks. The native row uses the
-official-compatible architecture and ordinary PyTorch convolutions; the custom
-rows change execution without changing learned parameters. Results are specific
-to this GPU and software stack. The complete 3/8-class results, raw run medians,
-methodology, and limitations are in the
-[benchmark notes](docs/benchmarks/activation-memory.md).
+The optimized compiled path takes **19.6% less step time than official** and
+**19.5% less than MONAI** without checkpointing. Checkpointing all expansion
+stages remains 13.1% faster than uncheckpointed official MedNeXt while reducing
+peak allocation by 54.9%. Official whole-block checkpointing reaches a lower
+3,236 MiB, but costs 85.16 ms; the all-expansion policy is 24.5% faster at a
+527 MiB memory cost. MONAI 1.5.2 exposes no activation-checkpointing option in
+its MedNeXt model API.
+
+¹ The official model has one extra trainable dummy scalar used by its legacy
+checkpoint implementation. ² MONAI Base is not structurally identical: its
+first two down-block expansion ratios differ, accounting for the parameter-count
+difference. The MedNeXt-Accel PyTorch-reference row matching official within
+0.1% shows that the optimized result comes from its execution policy rather
+than a smaller architecture. Results remain hardware and software specific.
+Raw triplicate medians, reproduction instructions, and older 3/8-class policy
+matrices are in the [benchmark notes](docs/benchmarks/implementation-comparison.md)
+and [activation-memory study](docs/benchmarks/activation-memory.md).
 
 ## Install
 

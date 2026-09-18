@@ -14,6 +14,7 @@ ROOT = Path(__file__).parents[2]
     [
         "benchmarks/autotune.py",
         "benchmarks/depthwise.py",
+        "benchmarks/implementations.py",
         "benchmarks/pointwise.py",
         "tools/profile_train_step.py",
         "tools/profile_matrix.py",
