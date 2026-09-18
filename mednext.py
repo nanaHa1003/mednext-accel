@@ -8,7 +8,12 @@ from torch import Tensor
 from torch.nn.functional import interpolate
 from torch.utils.checkpoint import checkpoint as grad_ckpt
 
-from activation_checkpoint import CheckpointStyle, resolve_checkpoint_style
+from activation_checkpoint import (
+    CheckpointLevels,
+    CheckpointStyle,
+    resolve_checkpoint_levels,
+    resolve_checkpoint_style,
+)
 
 __all__ = [
     "EvalModeGELU",
@@ -250,7 +255,8 @@ class MedNeXt(nn.Module):
         deep_supervision: bool = False,
         use_grad_checkpoint: bool = False,
         approximate_gelu_eval: bool = False,
-        checkpoint_style: Optional[CheckpointStyle] = None
+        checkpoint_style: Optional[CheckpointStyle] = None,
+        checkpoint_levels: CheckpointLevels = None
     ):
         super().__init__()
 
@@ -265,7 +271,6 @@ class MedNeXt(nn.Module):
             use_grad_checkpoint, checkpoint_style
         )
         self.use_grad_checkpoint = self.checkpoint_style == "block"
-        checkpoint_expanded = self.checkpoint_style == "expanded"
         self.approximate_gelu_eval = approximate_gelu_eval
 
         if not len(num_blocks) % 2:
@@ -275,6 +280,15 @@ class MedNeXt(nn.Module):
 
         self.num_blocks = num_blocks
         self.depth = len(self.num_blocks) // 2
+        self.checkpoint_levels = resolve_checkpoint_levels(
+            self.checkpoint_style, checkpoint_levels, self.depth
+        )
+
+        def checkpoint_expanded_at(level: int) -> bool:
+            return self.checkpoint_style == "expanded" and (
+                self.checkpoint_levels is None
+                or level in self.checkpoint_levels
+            )
 
         if isinstance(expand_ratio, int):
             self.expand_ratio = [expand_ratio] * len(num_blocks)
@@ -309,7 +323,7 @@ class MedNeXt(nn.Module):
                         expand_ratio=expand_ratio[i],
                         kernel_size=kernel_size,
                         res_block=res_block,
-                        checkpoint_expanded=checkpoint_expanded
+                        checkpoint_expanded=checkpoint_expanded_at(i)
                     )
                     for j in range(num_blocks[i])
                 ])
@@ -322,7 +336,7 @@ class MedNeXt(nn.Module):
                     expand_ratio=expand_ratio[i + 1],
                     kernel_size=kernel_size,
                     res_block=res_block,
-                    checkpoint_expanded=checkpoint_expanded
+                    checkpoint_expanded=checkpoint_expanded_at(i + 1)
             ))
 
         # Bottleneck
@@ -334,7 +348,7 @@ class MedNeXt(nn.Module):
                 kernel_size=kernel_size,
                 expand_ratio=expand_ratio[self.depth],
                 res_block=res_block,
-                checkpoint_expanded=checkpoint_expanded
+                checkpoint_expanded=checkpoint_expanded_at(self.depth)
             )
             for i in range(num_blocks[self.depth])
         ])
@@ -355,7 +369,7 @@ class MedNeXt(nn.Module):
                     expand_ratio=expand_ratio[idx],
                     kernel_size=kernel_size,
                     res_block=res_block,
-                    checkpoint_expanded=checkpoint_expanded
+                    checkpoint_expanded=checkpoint_expanded_at(i)
                 )
             )
             self.dec_blocks.append(
@@ -367,7 +381,7 @@ class MedNeXt(nn.Module):
                         expand_ratio=expand_ratio[idx],
                         kernel_size=kernel_size,
                         res_block=res_block,
-                        checkpoint_expanded=checkpoint_expanded
+                        checkpoint_expanded=checkpoint_expanded_at(i)
                     )
                     for j in range(num_blocks[idx])
                 ])
@@ -481,7 +495,8 @@ def mednext_small(
     deep_supervision: bool = False,
     use_grad_checkpoint: bool = False,
     approximate_gelu_eval: bool = False,
-    checkpoint_style: Optional[CheckpointStyle] = None
+    checkpoint_style: Optional[CheckpointStyle] = None,
+    checkpoint_levels: CheckpointLevels = None
 ) -> MedNeXt:
     model = MedNeXt(
         spatial_dims,
@@ -495,7 +510,8 @@ def mednext_small(
         deep_supervision=deep_supervision,
         use_grad_checkpoint=use_grad_checkpoint,
         approximate_gelu_eval=approximate_gelu_eval,
-        checkpoint_style=checkpoint_style
+        checkpoint_style=checkpoint_style,
+        checkpoint_levels=checkpoint_levels
     )
     return model
 
@@ -508,7 +524,8 @@ def mednext_base(
     deep_supervision: bool = False,
     use_grad_checkpoint: bool = False,
     approximate_gelu_eval: bool = False,
-    checkpoint_style: Optional[CheckpointStyle] = None
+    checkpoint_style: Optional[CheckpointStyle] = None,
+    checkpoint_levels: CheckpointLevels = None
 ) -> MedNeXt:
     model = MedNeXt(
         spatial_dims,
@@ -522,7 +539,8 @@ def mednext_base(
         deep_supervision=deep_supervision,
         use_grad_checkpoint=use_grad_checkpoint,
         approximate_gelu_eval=approximate_gelu_eval,
-        checkpoint_style=checkpoint_style
+        checkpoint_style=checkpoint_style,
+        checkpoint_levels=checkpoint_levels
     )
     return model
 
@@ -535,7 +553,8 @@ def mednext_medium(
     deep_supervision: bool = False,
     use_grad_checkpoint: bool = False,
     approximate_gelu_eval: bool = False,
-    checkpoint_style: Optional[CheckpointStyle] = None
+    checkpoint_style: Optional[CheckpointStyle] = None,
+    checkpoint_levels: CheckpointLevels = None
 ) -> MedNeXt:
     model = MedNeXt(
         spatial_dims,
@@ -549,7 +568,8 @@ def mednext_medium(
         deep_supervision=deep_supervision,
         use_grad_checkpoint=use_grad_checkpoint,
         approximate_gelu_eval=approximate_gelu_eval,
-        checkpoint_style=checkpoint_style
+        checkpoint_style=checkpoint_style,
+        checkpoint_levels=checkpoint_levels
     )
     return model
 
@@ -562,7 +582,8 @@ def mednext_large(
     deep_supervision: bool = False,
     use_grad_checkpoint: bool = False,
     approximate_gelu_eval: bool = False,
-    checkpoint_style: Optional[CheckpointStyle] = None
+    checkpoint_style: Optional[CheckpointStyle] = None,
+    checkpoint_levels: CheckpointLevels = None
 ) -> MedNeXt:
     model = MedNeXt(
         spatial_dims,
@@ -576,6 +597,7 @@ def mednext_large(
         deep_supervision=deep_supervision,
         use_grad_checkpoint=use_grad_checkpoint,
         approximate_gelu_eval=approximate_gelu_eval,
-        checkpoint_style=checkpoint_style
+        checkpoint_style=checkpoint_style,
+        checkpoint_levels=checkpoint_levels
     )
     return model

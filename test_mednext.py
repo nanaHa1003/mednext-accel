@@ -146,6 +146,49 @@ class MedNeXtCheckpointPolicyTests(unittest.TestCase):
         self.assertTrue(all(
             not module.checkpoint_expanded for module in block_policy_blocks))
 
+    def test_base_assigns_expanded_checkpointing_by_resolution_level(self):
+        def selected_names(model):
+            return {
+                name for name, module in model.named_modules()
+                if (isinstance(module, mednext.MedNeXtBlock)
+                    and module.checkpoint_expanded)
+            }
+
+        all_levels = mednext.mednext_base(
+            spatial_dims=3, in_channels=1, out_channels=3, filters=1,
+            checkpoint_style="expanded")
+        levels_0_1 = mednext.mednext_base(
+            spatial_dims=3, in_channels=1, out_channels=3, filters=1,
+            checkpoint_style="expanded", checkpoint_levels=(1, 0))
+        level_0 = mednext.mednext_base(
+            spatial_dims=3, in_channels=1, out_channels=3, filters=1,
+            checkpoint_style="expanded", checkpoint_levels=(0,))
+
+        self.assertEqual(len(selected_names(all_levels)), 26)
+        self.assertEqual(len(selected_names(levels_0_1)), 11)
+        self.assertEqual(levels_0_1.checkpoint_levels, (0, 1))
+        self.assertEqual(selected_names(level_0), {
+            "enc_blocks.0.0",
+            "enc_blocks.0.1",
+            "up_blocks.3",
+            "dec_blocks.3.0",
+            "dec_blocks.3.1",
+        })
+
+    def test_rejects_invalid_checkpoint_levels_at_model_boundary(self):
+        invalid = (
+            {"checkpoint_style": "none", "checkpoint_levels": (0,)},
+            {"checkpoint_style": "block", "checkpoint_levels": (0,)},
+            {"use_grad_checkpoint": True, "checkpoint_levels": (0,)},
+            {"checkpoint_style": "expanded", "checkpoint_levels": ()},
+            {"checkpoint_style": "expanded", "checkpoint_levels": (0, 0)},
+            {"checkpoint_style": "expanded", "checkpoint_levels": (2,)},
+            {"checkpoint_style": "expanded", "checkpoint_levels": [0]},
+        )
+        for options in invalid:
+            with self.subTest(options=options), self.assertRaises(ValueError):
+                self._model(**options)
+
     def test_rejects_conflicting_legacy_and_explicit_options(self):
         with self.assertRaisesRegex(ValueError, "use_grad_checkpoint"):
             self._model(use_grad_checkpoint=True, checkpoint_style="expanded")
@@ -161,13 +204,17 @@ class MedNeXtCheckpointPolicyTests(unittest.TestCase):
                     out_channels=3,
                     filters=1,
                     checkpoint_style="expanded",
+                    checkpoint_levels=(0,),
                 )
                 blocks = [
                     module for module in model.modules()
                     if isinstance(module, mednext.MedNeXtBlock)
                 ]
                 self.assertTrue(blocks)
-                self.assertTrue(all(module.checkpoint_expanded for module in blocks))
+                self.assertTrue(any(module.checkpoint_expanded for module in blocks))
+                self.assertTrue(any(
+                    not module.checkpoint_expanded for module in blocks))
+                self.assertEqual(model.checkpoint_levels, (0,))
 
     def test_state_dict_and_eval_output_are_policy_independent(self):
         torch.manual_seed(41)
@@ -194,41 +241,75 @@ class MedNeXtCheckpointPolicyTests(unittest.TestCase):
     def test_training_output_and_gradients_match_expanded_policy(self):
         torch.manual_seed(43)
         for deep_supervision in (False, True):
-            with self.subTest(deep_supervision=deep_supervision):
-                reference = self._model(
+            for checkpoint_levels in (None, (0,), (0, 1)):
+                with self.subTest(
                     deep_supervision=deep_supervision,
-                    checkpoint_style="none",
-                ).double().train()
-                candidate = self._model(
-                    deep_supervision=deep_supervision,
-                    checkpoint_style="expanded",
-                ).double().train()
-                candidate.load_state_dict(
-                    copy.deepcopy(reference.state_dict()), strict=True)
+                    checkpoint_levels=checkpoint_levels,
+                ):
+                    self._assert_training_gradient_parity(
+                        deep_supervision, checkpoint_levels)
 
-                reference_input = torch.randn(
-                    1, 1, 16, 16, 16, dtype=torch.float64, requires_grad=True)
-                candidate_input = reference_input.detach().clone().requires_grad_(True)
-                reference_output = reference(reference_input)
-                candidate_output = candidate(candidate_input)
-                reference_output.square().sum().backward()
-                candidate_output.square().sum().backward()
+    def _assert_training_gradient_parity(
+        self, deep_supervision, checkpoint_levels
+    ):
+        reference = self._model(
+            deep_supervision=deep_supervision,
+            checkpoint_style="none",
+        ).double().train()
+        candidate = self._model(
+            deep_supervision=deep_supervision,
+            checkpoint_style="expanded",
+            checkpoint_levels=checkpoint_levels,
+        ).double().train()
+        candidate.load_state_dict(
+            copy.deepcopy(reference.state_dict()), strict=True)
 
+        reference_input = torch.randn(
+            1, 1, 16, 16, 16, dtype=torch.float64, requires_grad=True)
+        candidate_input = reference_input.detach().clone().requires_grad_(True)
+        reference_output = reference(reference_input)
+        candidate_output = candidate(candidate_input)
+        reference_output.square().sum().backward()
+        candidate_output.square().sum().backward()
+
+        torch.testing.assert_close(
+            reference_output, candidate_output, rtol=0, atol=0)
+        torch.testing.assert_close(
+            reference_input.grad, candidate_input.grad, rtol=0, atol=0)
+        reference_parameters = dict(reference.named_parameters())
+        candidate_parameters = dict(candidate.named_parameters())
+        self.assertEqual(reference_parameters.keys(), candidate_parameters.keys())
+        for name in reference_parameters:
+            with self.subTest(parameter=name):
                 torch.testing.assert_close(
-                    reference_output, candidate_output, rtol=0, atol=0)
-                torch.testing.assert_close(
-                    reference_input.grad, candidate_input.grad, rtol=0, atol=0)
-                reference_parameters = dict(reference.named_parameters())
-                candidate_parameters = dict(candidate.named_parameters())
-                self.assertEqual(reference_parameters.keys(), candidate_parameters.keys())
-                for name in reference_parameters:
-                    with self.subTest(parameter=name):
-                        torch.testing.assert_close(
-                            reference_parameters[name].grad,
-                            candidate_parameters[name].grad,
-                            rtol=0,
-                            atol=0,
-                        )
+                    reference_parameters[name].grad,
+                    candidate_parameters[name].grad,
+                    rtol=0,
+                    atol=0,
+                )
+
+    def test_partial_policy_invokes_only_selected_level_blocks(self):
+        model = self._model(
+            checkpoint_style="expanded", checkpoint_levels=(0,)).train()
+        names_by_module = {
+            id(module): name for name, module in model.named_modules()
+            if isinstance(module, mednext.MedNeXtBlock)
+        }
+        calls = []
+
+        def checkpoint(function, *args, use_reentrant):
+            self.assertFalse(use_reentrant)
+            calls.append(names_by_module[id(function.__self__)])
+            return function(*args)
+
+        with mock.patch("mednext.grad_ckpt", side_effect=checkpoint):
+            model(torch.randn(1, 1, 16, 16, 16))
+
+        self.assertEqual(set(calls), {
+            "enc_blocks.0.0",
+            "up_blocks.0",
+            "dec_blocks.0.0",
+        })
 
 
 @unittest.skipUnless(torch.cuda.is_available(), "CUDA required")
