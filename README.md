@@ -1,5 +1,7 @@
 # MedNeXt-Accel
 
+[![CI](https://github.com/nanaHa1003/mednext-accel/actions/workflows/ci.yml/badge.svg)](https://github.com/nanaHa1003/mednext-accel/actions/workflows/ci.yml)
+
 MedNeXt-Accel is a production-oriented implementation of MedNeXt model
 architectures for PyTorch. It provides a pure-PyTorch reference model, lossless
 checkpoint import, selective activation checkpointing, portable evaluation
@@ -7,6 +9,55 @@ export, and optional per-shape CUDA acceleration.
 
 The package contains architecture code only. It has no trainer, dataset
 pipeline, loss framework, preprocessing stack, or nnU-Net dependency.
+
+## Why MedNeXt-Accel?
+
+The [official MedNeXt repository](https://github.com/MIC-DKFZ/MedNeXt) is the
+authoritative research release, and [MONAI](https://github.com/Project-MONAI/MONAI)
+provides a maintained implementation inside a broad medical-imaging framework.
+MedNeXt-Accel focuses on a smaller target: a standalone model package with
+checkpoint interoperability, measured training-memory controls, and optional
+shape-specific CUDA acceleration.
+
+| Capability | Official MedNeXt v1 | MONAI MedNeXt | MedNeXt-Accel |
+|---|---|---|---|
+| Published Small/Base/Medium/Large, 2D and 3D | Yes | Yes | Yes |
+| Standalone model without nnU-Net | No; distributed in an nnU-Net v1 fork | Yes, as part of MONAI | **Yes; architecture-only package** |
+| Load official v1 checkpoints | Native format | No conversion API; Base/Medium/Large also differ in down-block expansion ratios | **Automatic, tensor-preserving conversion** |
+| Load MONAI checkpoints | No conversion API | Native format | **Automatic; explicit MONAI-compatible factories for Base/Medium/Large** |
+| Activation checkpointing policy | Whole-block checkpointing in published Medium/Large factories | No model-level policy | **Expansion branch only, selectable per resolution stage** |
+| Model-specific optimized training operators | No | No | **Triton depthwise backward and optional pointwise GEMM** |
+| Hardware/shape-aware backend selection | No | No | **Conservative policy or persistent per-shape autotuning** |
+| Explicit portable-eval validation | No model export API | No model export API | **`jit.trace`, `torch.export`, and ONNX Runtime tested** |
+
+“No” means that the upstream model API does not provide that facility; it does
+not imply that an external wrapper cannot add it. Optional optimized operators
+keep the same parameters and state-dict paths as the PyTorch implementation.
+
+### RTX 5090 training results
+
+The table below isolates the execution-policy changes using the same
+official-compatible MedNeXt Base architecture. Measurements use an RTX 5090,
+PyTorch 2.12.0+cu132, CUDA 13.2, cuDNN 9.20, BF16 autocast, batch size one,
+`128x128x128` input, three classes, deep supervision, AdamW, and
+`torch.compile`. Each value is the median of three independent 50-step runs
+after 20 warmup steps. Memory is peak PyTorch allocation.
+
+| Execution policy | Checkpointed stages | Step time | Change vs. native | Peak allocated | Change vs. native |
+|---|---:|---:|---:|---:|---:|
+| Native PyTorch convolutions | None | 73.39 ms | baseline | 8,426 MiB | baseline |
+| Custom operators | None | **59.46 ms** | **19.0% less time / 1.23x throughput** | 8,375 MiB | 0.6% lower |
+| Custom operators + selective checkpointing | `(0,)` | **65.93 ms** | **10.2% less time** | **5,946 MiB** | **29.4% lower** |
+| Custom operators + selective checkpointing | `(0, 1)` | **68.62 ms** | **6.5% less time** | **4,510 MiB** | **46.5% lower** |
+| Custom operators + selective checkpointing | All expansion stages | **69.20 ms** | **5.7% less time** | **3,914 MiB** | **53.6% lower** |
+
+These results compare optimized and native execution inside this package, rather
+than timing the full nnU-Net or MONAI frameworks. The native row uses the
+official-compatible architecture and ordinary PyTorch convolutions; the custom
+rows change execution without changing learned parameters. Results are specific
+to this GPU and software stack. The complete 3/8-class results, raw run medians,
+methodology, and limitations are in the
+[benchmark notes](docs/benchmarks/activation-memory.md).
 
 ## Install
 
@@ -63,6 +114,11 @@ structurally compatible after key conversion. MONAI Base, Medium, and Large
 require the explicit factories in `mednext_accel.compat.monai` because their
 downsampling expansion widths differ from the official architecture. See
 [checkpoint compatibility](docs/checkpoints.md).
+
+Conversion only remaps parameter names: tensors are neither resized nor
+approximated. The converted model therefore reuses existing learned weights
+without retraining. Strict loading and exact-output regression tests cover the
+supported mappings, including eager and `torch.compile` wrapper checkpoints.
 
 ## Select acceleration
 

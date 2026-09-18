@@ -29,6 +29,10 @@ monai = ["monai>=1.5"]
 test = ["pytest>=8"]
 dev = ["build>=1.2", "pytest>=8", "ruff>=0.8", "twine>=5"]
 
+[project.urls]
+Repository = "https://github.com/nanaHa1003/mednext-accel"
+Issues = "https://github.com/nanaHa1003/mednext-accel/issues"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/mednext_accel"]
 
