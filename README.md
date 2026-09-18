@@ -45,23 +45,35 @@ after 20 warmup steps. Compilation uses
 `torch.compile(mode="default", fullgraph=True)`; memory is peak PyTorch
 allocation.
 
-| Implementation and policy | Compiled | Checkpointing | Parameters | Step time | Peak allocated |
-|---|---:|---|---:|---:|---:|
-| Official MedNeXt v1 Base | No | None | 10,529,232¹ | 100.01 ms | 9,358 MiB |
-| MONAI MedNeXt Base | No | None | 10,513,775² | 99.78 ms | 9,318 MiB |
-| MedNeXt-Accel, PyTorch reference | No | None | 10,529,231 | 99.96 ms | 9,355 MiB |
-| **MedNeXt-Accel, optimized** | No | None | 10,529,231 | **85.66 ms** | 9,355 MiB |
-| Official MedNeXt v1 Base | Yes | None | 10,529,232¹ | 73.98 ms | 8,339 MiB |
-| MONAI MedNeXt Base | Yes | None | 10,513,775² | 73.84 ms | 8,298 MiB |
-| MedNeXt-Accel, PyTorch reference | Yes | None | 10,529,231 | 74.06 ms | 8,339 MiB |
-| **MedNeXt-Accel, optimized** | Yes | None | 10,529,231 | **59.46 ms** | 8,339 MiB |
-| Official MedNeXt v1 Base | Yes | Whole block | 10,529,232¹ | 85.16 ms | **3,236 MiB** |
-| **MedNeXt-Accel, optimized** | Yes | Expansion stage `(0,)` | 10,529,231 | **62.83 ms** | 5,795 MiB |
-| **MedNeXt-Accel, optimized** | Yes | Expansion stages `(0, 1)` | 10,529,231 | **63.98 ms** | 4,359 MiB |
-| **MedNeXt-Accel, optimized** | Yes | All expansion stages | 10,529,231 | **64.29 ms** | **3,763 MiB** |
+The primary comparison below has no activation checkpointing. Eager results are
+included because compilation is recommended but not required.
 
-The optimized compiled path takes **19.6% less step time than official** and
-**19.5% less than MONAI** without checkpointing. Checkpointing all expansion
+| Implementation and policy | Parameters | Eager step | Eager peak | Compiled step | Compiled peak |
+|---|---:|---:|---:|---:|---:|
+| Official MedNeXt v1 Base | 10,529,232¹ | 100.01 ms | 9,358 MiB | 73.98 ms | 8,339 MiB |
+| MONAI MedNeXt Base | 10,513,775² | 99.78 ms | 9,318 MiB | 73.84 ms | 8,298 MiB |
+| MedNeXt-Accel, PyTorch reference | 10,529,231 | 99.96 ms | 9,355 MiB | 74.06 ms | 8,339 MiB |
+| **MedNeXt-Accel, optimized** | 10,529,231 | **85.66 ms** | 9,355 MiB | **59.46 ms** | 8,339 MiB |
+
+Without compilation, the optimized policy takes **14.3% less step time than
+official** and **14.2% less than MONAI**. Compilation reduces its step time by a
+further 30.6%. The compiled optimized path takes **19.6% less step time than
+official** and **19.5% less than MONAI**.
+
+All checkpointing rows below use compilation so that they compare memory
+policies under the recommended execution setting.
+
+| Implementation and policy | Checkpointing | Step time | Peak allocated |
+|---|---|---:|---:|
+| Official MedNeXt v1 Base | None | 73.98 ms | 8,339 MiB |
+| Official MedNeXt v1 Base | Whole block | 85.16 ms | **3,236 MiB** |
+| MONAI MedNeXt Base | None; no checkpoint API | 73.84 ms | 8,298 MiB |
+| **MedNeXt-Accel, optimized** | None | **59.46 ms** | 8,339 MiB |
+| **MedNeXt-Accel, optimized** | Expansion stage `(0,)` | **62.83 ms** | 5,795 MiB |
+| **MedNeXt-Accel, optimized** | Expansion stages `(0, 1)` | **63.98 ms** | 4,359 MiB |
+| **MedNeXt-Accel, optimized** | All expansion stages | **64.29 ms** | **3,763 MiB** |
+
+Checkpointing all expansion
 stages remains 13.1% faster than uncheckpointed official MedNeXt while reducing
 peak allocation by 54.9%. Official whole-block checkpointing reaches a lower
 3,236 MiB, but costs 85.16 ms; the all-expansion policy is 24.5% faster at a
