@@ -44,7 +44,8 @@ class MedNeXtBlock(nn.Module):
         out_channels: int,
         expand_ratio: int,
         kernel_size: int,
-        res_block: bool = True
+        res_block: bool = True,
+        checkpoint_expanded: bool = False
     ):
         super().__init__()
 
@@ -56,6 +57,7 @@ class MedNeXtBlock(nn.Module):
             raise ValueError(f"MedNeXtBlock only support 2D or 3D inputs.")
 
         self.res_block = res_block
+        self.checkpoint_expanded = checkpoint_expanded
 
         layers = OrderedDict()
         layers["conv1"] = Conv(
@@ -89,11 +91,22 @@ class MedNeXtBlock(nn.Module):
         )
         self.layers = nn.Sequential(layers)
 
+    def _expanded_forward(self, x: Tensor) -> Tensor:
+        x = self.layers.conv2(x)
+        x = self.layers.act(x)
+        return self.layers.conv3(x)
+
     def forward(self, x: Tensor) -> Tensor:
-        s = self.layers(x)
+        residual = x
+        x = self.layers.conv1(x)
+        x = self.layers.norm(x)
+        if self.checkpoint_expanded and self.training and torch.is_grad_enabled():
+            x = grad_ckpt(self._expanded_forward, x, use_reentrant=False)
+        else:
+            x = self._expanded_forward(x)
         if self.res_block:
-            return s + x
-        return s
+            x = x + residual
+        return x
 
 class MedNeXtDownBlock(MedNeXtBlock):
     def __init__(
@@ -103,7 +116,8 @@ class MedNeXtDownBlock(MedNeXtBlock):
         out_channels: int,
         expand_ratio: int,
         kernel_size: int,
-        res_block: bool = True
+        res_block: bool = True,
+        checkpoint_expanded: bool = False
     ):
         super().__init__(
             spatial_dims,
@@ -111,7 +125,8 @@ class MedNeXtDownBlock(MedNeXtBlock):
             out_channels,
             expand_ratio,
             kernel_size,
-            res_block=False
+            res_block=False,
+            checkpoint_expanded=checkpoint_expanded
         )
 
         # Get convolution type and replace it
@@ -152,7 +167,8 @@ class MedNeXtUpBlock(MedNeXtBlock):
         out_channels: int,
         expand_ratio: int,
         kernel_size: int,
-        res_block: bool = True
+        res_block: bool = True,
+        checkpoint_expanded: bool = False
     ):
         super().__init__(
             spatial_dims,
@@ -160,7 +176,8 @@ class MedNeXtUpBlock(MedNeXtBlock):
             out_channels,
             expand_ratio,
             kernel_size,
-            res_block=False
+            res_block=False,
+            checkpoint_expanded=checkpoint_expanded
         )
 
         # Note: MedNeXtBlock should ensure `spatial_dims` is either 2 or 3
@@ -542,4 +559,3 @@ def mednext_large(
         approximate_gelu_eval=approximate_gelu_eval
     )
     return model
-
