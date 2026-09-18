@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import statistics
 import subprocess
 import sys
 from pathlib import Path
@@ -22,7 +23,11 @@ def parse_args() -> argparse.Namespace:
         choices=("default", "reduce-overhead", "max-autotune", "max-autotune-no-cudagraphs"),
         default="default",
     )
+    parser.add_argument(
+        "--policy", choices=("torch", "conservative", "autotune"), default="conservative"
+    )
     parser.add_argument("--warmup", type=int, default=2)
+    parser.add_argument("--steps", type=int, default=20)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--batch-size", type=int, help=argparse.SUPPRESS)
@@ -76,11 +81,11 @@ def measure(args: argparse.Namespace) -> dict[str, Any]:
         .cuda()
         .train()
     )
-    optimize(
+    report = optimize(
         model,
         input_shape=shape,
         dtype=torch.bfloat16,
-        policy="conservative",
+        policy=args.policy,
         compile_mode=args.compile_mode,
     )
     model.compile(mode=args.compile_mode, fullgraph=True)
@@ -114,7 +119,14 @@ def measure(args: argparse.Namespace) -> dict[str, Any]:
             step()
         torch.cuda.synchronize()
         torch.cuda.reset_peak_memory_stats()
-        loss = step()
+        events = []
+        for _ in range(args.steps):
+            start = torch.cuda.Event(enable_timing=True)
+            end = torch.cuda.Event(enable_timing=True)
+            start.record()
+            loss = step()
+            end.record()
+            events.append((start, end))
         torch.cuda.synchronize()
     except Exception as error:
         if "out of memory" not in str(error).lower():
@@ -126,17 +138,27 @@ def measure(args: argparse.Namespace) -> dict[str, Any]:
             "error": str(error).splitlines()[0],
         }
 
+    step_times = [start.elapsed_time(end) for start, end in events]
+    median_step_ms = statistics.median(step_times)
     return {
         "checkpoint": args.checkpoint,
         "batch_size": args.batch_size,
         "status": "ok",
         "peak_allocated_mib": torch.cuda.max_memory_allocated() / 2**20,
         "peak_reserved_mib": torch.cuda.max_memory_reserved() / 2**20,
+        "median_step_ms": median_step_ms,
+        "mean_step_ms": statistics.mean(step_times),
+        "step_stdev_ms": statistics.stdev(step_times) if len(step_times) > 1 else 0.0,
+        "samples_per_second": args.batch_size * 1_000 / median_step_ms,
+        "milliseconds_per_sample": median_step_ms / args.batch_size,
         "final_loss": loss.item(),
         "gpu": torch.cuda.get_device_name(),
         "torch": torch.__version__,
         "cuda": torch.version.cuda,
         "compile_mode": args.compile_mode,
+        "optimization_policy": args.policy,
+        "optimized_replacements": report.replacements,
+        "optimization_notes": report.notes,
         "fullgraph": True,
     }
 
@@ -146,11 +168,15 @@ def sweep(args: argparse.Namespace) -> None:
         raise SystemExit("batch sizes must be positive")
     if args.warmup < 1:
         raise SystemExit("warmup must be positive")
+    if args.steps < 1:
+        raise SystemExit("steps must be positive")
     payload: dict[str, Any] = {
         "workload": "MedNeXt Base 128^3, BF16, 3 classes, deep supervision, AdamW",
         "compile_mode": args.compile_mode,
+        "optimization_policy": args.policy,
         "fullgraph": True,
         "warmup": args.warmup,
+        "steps": args.steps,
         "results": [],
     }
     for checkpoint in args.checkpoints:
@@ -165,8 +191,12 @@ def sweep(args: argparse.Namespace) -> None:
                 str(batch_size),
                 "--compile-mode",
                 args.compile_mode,
+                "--policy",
+                args.policy,
                 "--warmup",
                 str(args.warmup),
+                "--steps",
+                str(args.steps),
             ]
             print(f"running checkpoint={checkpoint}, batch={batch_size}", flush=True)
             completed = subprocess.run(command, capture_output=True, text=True)
@@ -179,7 +209,9 @@ def sweep(args: argparse.Namespace) -> None:
                 _write_json(args.output, payload)
             if result["status"] == "ok":
                 print(
-                    f"  {result['peak_allocated_mib']:.0f} MiB allocated, "
+                    f"  {result['median_step_ms']:.2f} ms, "
+                    f"{result['samples_per_second']:.2f} samples/s, "
+                    f"{result['peak_allocated_mib']:.0f} MiB allocated, "
                     f"{result['peak_reserved_mib']:.0f} MiB reserved",
                     flush=True,
                 )

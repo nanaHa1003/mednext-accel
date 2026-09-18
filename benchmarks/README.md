@@ -23,8 +23,16 @@ python benchmarks/implementations.py \
 # Batch-size memory scaling across checkpoint policies
 python benchmarks/batch_memory.py \
   --batch-sizes 1 2 4 8 \
+  --policy torch \
+  --warmup 5 --steps 20 \
   --output artifacts/batch-memory.json
 ```
+
+Use `--policy torch` to isolate batch and checkpoint scaling with one backend.
+Use `--policy conservative` to measure production dispatch, including its safe
+fallback for shapes outside the validated custom-kernel envelope. Results include
+median step time, samples per second, milliseconds per sample, and allocated and
+reserved CUDA memory.
 
 Run benchmarks on an otherwise idle GPU. Record the GPU, driver, PyTorch, CUDA,
 cuDNN, Triton, dtype, compile mode, input shape, warmup, and repetitions with

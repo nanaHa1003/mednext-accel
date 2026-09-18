@@ -188,8 +188,10 @@ Use `fullgraph=True` when the complete training graph is supported. On the RTX
 input shape and enough steps to amortize compilation.
 
 The `torch` policy uses only native operators. `conservative` applies the narrow
-RTX 50-series BF16 configurations validated in this repository. `autotune`
-benchmarks every unique eligible shape on the current GPU and caches the result.
+RTX 50-series BF16 configurations validated in this repository. Its current
+model-level validation envelope is batch one with `128x128x128` inputs; other
+batch sizes safely fall back to PyTorch operators. `autotune` benchmarks every
+unique eligible shape on the current GPU and caches the result.
 Every unselected shape uses PyTorch. Optional backends preserve parameter
 identity and state-dict paths. See [optimization and compilation](docs/optimization.md).
 
