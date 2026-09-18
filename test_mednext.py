@@ -2,6 +2,7 @@
 import copy
 import unittest
 from unittest import mock
+import warnings
 
 import torch
 import torch.nn.functional as F
@@ -228,6 +229,80 @@ class MedNeXtCheckpointPolicyTests(unittest.TestCase):
                             rtol=0,
                             atol=0,
                         )
+
+
+@unittest.skipUnless(torch.cuda.is_available(), "CUDA required")
+class MedNeXtCheckpointCudaTests(unittest.TestCase):
+    @staticmethod
+    def _model(**options):
+        return mednext.MedNeXt(
+            spatial_dims=3,
+            in_channels=1,
+            out_channels=3,
+            kernel_size=3,
+            filters=2,
+            num_blocks=[1, 1, 1],
+            expand_ratio=[2, 2, 2],
+            checkpoint_style="expanded",
+            **options,
+        )
+
+    def test_compiled_fullgraph_bf16_training(self):
+        model = self._model(deep_supervision=True).cuda().train()
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message="`torch.jit.script_method` is deprecated.*",
+                category=DeprecationWarning,
+            )
+            compiled = torch.compile(model, fullgraph=True)
+            x = torch.randn(1, 1, 16, 16, 16, device="cuda")
+            with torch.autocast("cuda", dtype=torch.bfloat16):
+                output = compiled(x)
+                loss = output.float().square().mean()
+        loss.backward()
+
+        self.assertTrue(torch.isfinite(output).all().item())
+        self.assertTrue(all(
+            torch.isfinite(parameter.grad).all().item()
+            for parameter in model.parameters()
+            if parameter.grad is not None
+        ))
+
+    def test_custom_operator_wrappers_compose_with_checkpoint(self):
+        try:
+            from depthwise_split import replace_highres_depthwise_convs
+            from pointwise_gemm import replace_pointwise_convs
+        except (ImportError, RuntimeError) as error:
+            self.skipTest(f"optional custom operators unavailable: {error}")
+
+        model = mednext.MedNeXt(
+            spatial_dims=3,
+            in_channels=1,
+            out_channels=3,
+            kernel_size=3,
+            filters=32,
+            num_blocks=[1, 1, 1],
+            expand_ratio=[2, 2, 2],
+            deep_supervision=True,
+            checkpoint_style="expanded",
+        ).cuda().train()
+        pointwise_replacements = replace_pointwise_convs(model)
+        depthwise_replacements = replace_highres_depthwise_convs(model)
+        self.assertGreater(pointwise_replacements, 0)
+        self.assertGreater(depthwise_replacements, 0)
+
+        x = torch.randn(1, 1, 16, 16, 16, device="cuda")
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            output = model(x)
+            loss = output.float().square().mean()
+        loss.backward()
+        self.assertTrue(torch.isfinite(output).all().item())
+        self.assertTrue(all(
+            torch.isfinite(parameter.grad).all().item()
+            for parameter in model.parameters()
+            if parameter.grad is not None
+        ))
 
 
 class EvalApproximateGELUTests(unittest.TestCase):
