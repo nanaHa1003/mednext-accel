@@ -38,6 +38,7 @@ addopts = "-ra"
 markers = [
   "cuda: requires a CUDA device",
   "onnx: requires ONNX export dependencies",
+  "release: builds and validates a distributable artifact",
 ]
 
 [tool.ruff]

@@ -109,6 +109,11 @@ Published RTX 5090 measurements and their limits are retained under
 specific; use the autotuner or collect a matched profile on L40S, RTX A6000,
 RTX 8000, and other architectures.
 
+CPU correctness, export, and wheel-install tests run in CI on Python 3.10–3.12.
+CUDA kernel correctness and performance tests require a local NVIDIA GPU; run
+the complete suite with `python -m pytest -q` after installing the
+`accelerated`, `export`, and `monai` extras.
+
 ## Attribution
 
 The architecture follows the official
