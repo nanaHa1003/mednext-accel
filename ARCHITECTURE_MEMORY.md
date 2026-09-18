@@ -64,6 +64,48 @@ A double-precision single-block check found maximum absolute differences of
 zero for output, input gradient, and every parameter gradient between ordinary
 execution and expanded-branch checkpointing.
 
+### Implemented-policy validation
+
+The production policy was measured on an RTX 5090 with driver 595.84,
+PyTorch 2.12.0+cu132, CUDA 13.2, cuDNN 9.20, and Triton 3.7.0. The workload is
+MedNeXt Base, batch size one, `128x128x128`, BF16 autocast, deep supervision,
+AdamW, and `torch.compile`. Each entry uses 20 warmup steps and reports the
+median of three independent 50-step runs. Forward and backward are medians of
+the per-run GPU-event medians. Peak memory is maximum PyTorch allocation.
+
+Native convolution results:
+
+| Classes | Policy | Raw step times | Step median ± SD | Forward | Backward | Peak allocated |
+|---:|---|---|---:|---:|---:|---:|
+| 3 | `none` | 73.64, 74.84, 74.95 ms | 74.84 ± 0.73 ms | 22.18 ms | 51.72 ms | 8,426 MiB |
+| 3 | `expanded` | 79.07, 80.31, 80.49 ms | 80.31 ± 0.77 ms | 20.21 ms | 59.39 ms | 3,852 MiB |
+| 3 | `block` | 85.38, 85.69, 86.91 ms | 85.69 ± 0.81 ms | 19.05 ms | 65.99 ms | 3,285 MiB |
+| 8 | `none` | 75.54, 76.43, 76.55 ms | 76.43 ± 0.55 ms | 22.17 ms | 52.75 ms | 8,751 MiB |
+| 8 | `expanded` | 80.24, 81.14, 82.05 ms | 81.14 ± 0.90 ms | 20.08 ms | 59.66 ms | 4,052 MiB |
+| 8 | `block` | 86.78, 86.85, 88.64 ms | 86.85 ± 1.05 ms | 18.76 ms | 66.70 ms | 3,488 MiB |
+
+With three classes, `expanded` reduces peak allocation by 54.3%, costs 7.3%
+relative to `none`, and is 6.3% faster than `block`. With eight classes, it
+reduces peak allocation by 53.7%, costs 6.2%, and is 6.6% faster than `block`.
+
+The current pointwise-GEMM plus split-depthwise configuration produces:
+
+| Classes | Policy | Raw step times | Step median ± SD | Forward | Backward | Peak allocated |
+|---:|---|---|---:|---:|---:|---:|
+| 3 | `none` | 60.56, 60.57, 60.69 ms | 60.57 ± 0.07 ms | 23.67 ms | 36.02 ms | 8,375 MiB |
+| 3 | `expanded` | 70.35, 70.61, 70.66 ms | 70.61 ± 0.16 ms | 23.41 ms | 46.38 ms | 3,914 MiB |
+| 3 | `block` | 79.49, 79.52, 79.60 ms | 79.52 ± 0.06 ms | 23.25 ms | 55.44 ms | 3,345 MiB |
+| 8 | `none` | 62.37, 62.44, 62.59 ms | 62.44 ± 0.11 ms | 23.83 ms | 37.36 ms | 8,815 MiB |
+| 8 | `expanded` | 72.34, 72.56, 72.73 ms | 72.56 ± 0.19 ms | 23.55 ms | 47.71 ms | 4,117 MiB |
+| 8 | `block` | 80.94, 81.09, 81.13 ms | 81.09 ± 0.10 ms | 23.31 ms | 56.42 ms | 3,548 MiB |
+
+With the custom operators, `expanded` still saves approximately 53.3% of peak
+allocation and is 10.5--11.2% faster than `block`. Its cost relative to `none`
+rises to 16.2--16.6% because accelerating depthwise backward makes expansion
+recomputation a larger fraction of the remaining step time. This is a useful
+memory/performance point, but callers that fit the no-checkpoint model should
+prefer `none` for maximum throughput.
+
 ## 1. Selective expanded-branch checkpointing
 
 ### Motivation
@@ -81,7 +123,7 @@ MedNeXt Large, one BF16 `[1, 96, 128, 128, 128]` tensor is approximately
 the GELU and compression-convolution backward passes. These long-lived expanded
 tensors dominate the activation footprint.
 
-### Proposed behavior
+### Implemented behavior
 
 Checkpoint only the following branch:
 
@@ -108,17 +150,26 @@ directly.
 - Compose with native and custom depthwise operators.
 - Treat this as an execution policy, not a new model variant.
 
-The proposed policy name is `expanded`. The complete policy vocabulary should
-eventually be `none`, `expanded`, and `block`.
+The public `checkpoint_style` values are `none`, `expanded`, and `block`.
+The legacy `use_grad_checkpoint=True` setting retains its original whole-block
+meaning and resolves to `block`. Supplying that legacy setting together with
+an explicit policy raises `ValueError` instead of choosing silently.
 
-### Validation still required
+Unit coverage verifies exact double-precision output, input-gradient, and
+parameter-gradient parity for normal, downsample, and upsample blocks. It also
+verifies strict state-dict loading across policies, both deep-supervision
+states, evaluation and `no_grad()` bypass, BF16 autocast, custom-operator
+composition, and `torch.compile(fullgraph=True)`.
 
-- Repeat the Base and Large measurements with at least three independent runs.
-- Compare FP32, BF16, and FP16 output and gradients against ordinary execution.
-- Test checkpoint save/load before and after enabling the policy.
-- Test eager, compiled, DDP, and all supported GPUs.
-- Profile compilation boundaries to ensure checkpointing does not introduce
-  unexpected graph breaks.
+### Validation remaining
+
+- Repeat the production matrix on L40S, RTX A6000, and RTX 8000.
+- Add FP32 and FP16 model-level numerical comparisons; BF16 compiled execution
+  and double-precision exact comparisons are covered locally.
+- Test multi-process DDP. Single-process autograd and compiled execution are
+  covered, but no distributed claim is made yet.
+- Repeat the Large measurements with the implemented policy. Existing Large
+  numbers above are feasibility measurements from the prototype.
 
 ## 2. Resolution-aware checkpointing
 

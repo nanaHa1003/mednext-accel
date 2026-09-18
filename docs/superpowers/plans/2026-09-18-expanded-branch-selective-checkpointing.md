@@ -446,7 +446,7 @@ git commit -m "test: cover selective checkpoint integration"
 
 **Files:**
 - Modify: `ARCHITECTURE_MEMORY.md`
-- Generated: `profile_results/checkpoint-*`
+- Ignored artifacts: `profile_results/checkpoint-*`
 
 - [ ] **Step 1: Measure the native compiled Base model**
 
@@ -528,9 +528,12 @@ Inspect `git diff --check` and verify that the model source contains no changes 
 - [ ] **Step 6: Commit the validated result record**
 
 ```bash
-git add ARCHITECTURE_MEMORY.md profile_results/checkpoint-*
+git add ARCHITECTURE_MEMORY.md
 git commit -m "docs: record selective checkpoint benchmarks"
 ```
+
+Raw profiler outputs remain local artifacts under the ignored
+`profile_results/` directory and must not be committed.
 
 ## Completion Criteria
 
