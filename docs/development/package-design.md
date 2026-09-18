@@ -32,7 +32,7 @@ model = mednext_base(
     spatial_dims=3,
     kernel_size=3,
     deep_supervision=True,
-    checkpointing=CheckpointConfig(expansion=True, stages=(0, 1)),
+    checkpointing=CheckpointConfig(style="expansion", stages=(0, 1)),
 )
 ```
 
@@ -42,11 +42,12 @@ available for advanced construction. The factories default to the reference
 PyTorch backend and perform no device work, benchmarking, compilation, or cache
 writes.
 
-`CheckpointConfig` combines expansion-branch selective checkpointing and
-resolution selection. `checkpointing=None` disables checkpointing. Stage zero is
-the highest spatial resolution and stage four is the bottleneck. A tuple selects
-specific stages; `stages=None` selects all stages. Checkpointing runs only while
-training with gradients enabled.
+`CheckpointConfig` combines a recomputation boundary with resolution selection.
+`style="expansion"` checkpoints only the expanded branch; `style="block"`
+checkpoints complete MedNeXt and resampling blocks. `checkpointing=None` disables
+checkpointing. Stage zero is the highest spatial resolution and stage four is the
+bottleneck. A tuple selects specific stages; `stages=None` selects all stages.
+Checkpointing runs only while training with gradients enabled.
 
 Deep supervision is enabled independently of checkpointing. Training output can
 use `tuple`, `list`, or `stacked` form; `tuple` is the default and matches MONAI's

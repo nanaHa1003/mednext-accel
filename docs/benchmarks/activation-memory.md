@@ -150,9 +150,10 @@ directly.
 - Compose with native and custom depthwise operators.
 - Treat this as an execution policy, not a new model variant.
 
-The production package exposes expansion-branch checkpointing through
-`CheckpointConfig`. Whole-block checkpointing was retained only as an
-experimental comparison and is not part of the package API.
+The production package exposes both expansion-branch and whole-block
+checkpointing through `CheckpointConfig`. The expansion policy is the default
+because it provides a better time/memory tradeoff; the whole-block policy remains
+available when minimizing activation memory is more important than throughput.
 
 Unit coverage verifies exact double-precision output, input-gradient, and
 parameter-gradient parity for normal, downsample, and upsample blocks. It also
@@ -196,6 +197,15 @@ because spatial volume falls by eight while channels double. This makes the
 mednext_base(
     ...,
     checkpointing=CheckpointConfig(stages=(0, 1)),
+)
+```
+
+The same stage selection applies to whole-block recomputation:
+
+```python
+mednext_base(
+    ...,
+    checkpointing=CheckpointConfig(style="block", stages=(0, 1)),
 )
 ```
 

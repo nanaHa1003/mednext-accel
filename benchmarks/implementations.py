@@ -115,6 +115,8 @@ def main() -> None:
             checkpointing = CheckpointConfig(stages=(0, 1))
         elif checkpoint == "all-expansion":
             checkpointing = CheckpointConfig(stages=None)
+        elif checkpoint == "whole-block":
+            checkpointing = CheckpointConfig(style="block")
         model = (
             mednext_base(
                 in_channels=1,
@@ -218,7 +220,7 @@ def main() -> None:
                 "checkpoint": selection,
                 "compiled": True,
             }
-            for selection in ("stage-0", "stage-0-1", "all-expansion")
+            for selection in ("stage-0", "stage-0-1", "all-expansion", "whole-block")
         ],
     ]
     configurations = {

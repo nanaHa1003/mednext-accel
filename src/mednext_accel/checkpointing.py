@@ -3,20 +3,23 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
+
+CheckpointStyle = Literal["expansion", "block"]
 
 
 @dataclass(frozen=True, slots=True)
 class CheckpointConfig:
-    """Select expansion-branch checkpointing by resolution stage."""
+    """Select a checkpointing style and the resolution stages it covers."""
 
-    expansion: bool = True
+    style: CheckpointStyle = "expansion"
     stages: tuple[int, ...] | None = None
 
     def __post_init__(self) -> None:
+        if self.style not in ("expansion", "block"):
+            raise ValueError("style must be 'expansion' or 'block'")
         if self.stages is None:
             return
-        if not self.expansion:
-            raise ValueError("stages require expansion checkpointing to be enabled")
         if not self.stages:
             raise ValueError("stages must be a non-empty tuple or None")
         if any(type(stage) is not int for stage in self.stages):
@@ -28,6 +31,18 @@ class CheckpointConfig:
         object.__setattr__(self, "stages", tuple(sorted(self.stages)))
 
     def includes(self, stage: int) -> bool:
-        """Return whether the expansion branch at ``stage`` is checkpointed."""
+        """Return whether the selected policy covers ``stage``."""
 
-        return self.expansion and (self.stages is None or stage in self.stages)
+        return self.stages is None or stage in self.stages
+
+    @property
+    def checkpoints_expansion(self) -> bool:
+        """Return whether expanded branches are checkpointed."""
+
+        return self.style == "expansion"
+
+    @property
+    def checkpoints_blocks(self) -> bool:
+        """Return whether complete blocks are checkpointed."""
+
+        return self.style == "block"

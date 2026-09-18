@@ -89,7 +89,8 @@ def test_invalid_deep_supervision_output_is_rejected() -> None:
         )
 
 
-def test_checkpoint_policy_preserves_state_and_gradients() -> None:
+@pytest.mark.parametrize("style", ["expansion", "block"])
+def test_checkpoint_policy_preserves_state_and_gradients(style: str) -> None:
     torch.manual_seed(42)
     reference = mednext_small(
         in_channels=1,
@@ -100,7 +101,7 @@ def test_checkpoint_policy_preserves_state_and_gradients() -> None:
         in_channels=1,
         out_channels=2,
         base_channels=2,
-        checkpointing=CheckpointConfig(stages=(0, 1)),
+        checkpointing=CheckpointConfig(style=style, stages=(0, 1)),
     ).train()
     checkpointed.load_state_dict(reference.state_dict(), strict=True)
     reference_input = torch.randn(1, 1, 32, 32, 32, requires_grad=True)
@@ -118,6 +119,30 @@ def test_checkpoint_policy_preserves_state_and_gradients() -> None:
     assert checkpointed.state_dict().keys() == reference.state_dict().keys()
     for expected, actual in zip(reference.parameters(), checkpointed.parameters(), strict=True):
         torch.testing.assert_close(actual.grad, expected.grad)
+
+
+@pytest.mark.cuda
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.parametrize("style", ["expansion", "block"])
+def test_checkpoint_policy_compiles_fullgraph(style: str) -> None:
+    model = (
+        mednext_small(
+            in_channels=1,
+            out_channels=2,
+            base_channels=2,
+            checkpointing=CheckpointConfig(style=style),
+        )
+        .cuda()
+        .train()
+    )
+    model.compile(mode="default", fullgraph=True)
+    sample = torch.randn(1, 1, 32, 32, 32, device="cuda", requires_grad=True)
+
+    output = model(sample)
+    assert isinstance(output, torch.Tensor)
+    output.square().mean().backward()
+
+    assert sample.grad is not None
 
 
 def test_approximate_gelu_is_eval_only() -> None:

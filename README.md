@@ -25,7 +25,7 @@ shape-specific CUDA acceleration.
 | Standalone model without nnU-Net | No; distributed in an nnU-Net v1 fork | Yes, as part of MONAI | **Yes; architecture-only package** |
 | Load official v1 checkpoints | Native format | No conversion API; Base/Medium/Large also differ in down-block expansion ratios | **Automatic, tensor-preserving conversion** |
 | Load MONAI checkpoints | No conversion API | Native format | **Automatic; explicit MONAI-compatible factories for Base/Medium/Large** |
-| Activation checkpointing policy | Whole-block checkpointing in published Medium/Large factories | No model-level policy | **Expansion branch only, selectable per resolution stage** |
+| Activation checkpointing policy | Whole-block checkpointing in published Medium/Large factories | No model-level policy | **Expansion branch or whole block, selectable per resolution stage** |
 | Model-specific optimized training operators | No | No | **Triton depthwise backward and optional pointwise GEMM** |
 | Hardware/shape-aware backend selection | No | No | **Conservative policy or persistent per-shape autotuning** |
 | Explicit portable-eval validation | No model export API | No model export API | **`jit.trace`, `torch.export`, and ONNX Runtime tested** |
@@ -66,19 +66,21 @@ policies under the recommended execution setting.
 | Implementation and policy | Checkpointing | Step time | Peak allocated |
 |---|---|---:|---:|
 | Official MedNeXt v1 Base | None | 73.98 ms | 8,339 MiB |
-| Official MedNeXt v1 Base | Whole block | 85.16 ms | **3,236 MiB** |
+| Official MedNeXt v1 Base | Whole block | 84.92 ms | 3,236 MiB |
 | MONAI MedNeXt Base | None; no checkpoint API | 73.84 ms | 8,298 MiB |
 | **MedNeXt-Accel, optimized** | None | **59.46 ms** | 8,339 MiB |
-| **MedNeXt-Accel, optimized** | Expansion stage `(0,)` | **62.83 ms** | 5,795 MiB |
-| **MedNeXt-Accel, optimized** | Expansion stages `(0, 1)` | **63.98 ms** | 4,359 MiB |
-| **MedNeXt-Accel, optimized** | All expansion stages | **64.29 ms** | **3,763 MiB** |
+| **MedNeXt-Accel, optimized** | Expansion stage `(0,)` | **62.54 ms** | 5,795 MiB |
+| **MedNeXt-Accel, optimized** | Expansion stages `(0, 1)` | **63.78 ms** | 4,358 MiB |
+| **MedNeXt-Accel, optimized** | All expansion stages | **64.26 ms** | 3,762 MiB |
+| **MedNeXt-Accel, optimized** | Whole block | 72.55 ms | **3,235 MiB** |
 
 Checkpointing all expansion
 stages remains 13.1% faster than uncheckpointed official MedNeXt while reducing
 peak allocation by 54.9%. Official whole-block checkpointing reaches a lower
-3,236 MiB, but costs 85.16 ms; the all-expansion policy is 24.5% faster at a
-527 MiB memory cost. MONAI 1.5.2 exposes no activation-checkpointing option in
-its MedNeXt model API.
+3,236 MiB, but costs 84.92 ms; the all-expansion policy is 24.3% faster at a
+526 MiB memory cost. MedNeXt-Accel whole-block checkpointing reaches the same
+memory point in 72.55 ms, 14.6% faster than the official policy. MONAI 1.5.2
+exposes no activation-checkpointing option in its MedNeXt model API.
 
 ¹ The official model has one extra trainable dummy scalar used by its legacy
 checkpoint implementation. ² MONAI Base is not structurally identical: its
@@ -97,15 +99,19 @@ not pin a CUDA build or an exact PyTorch release.
 
 ```bash
 python -m pip install torch
-python -m pip install .
+python -m pip install \
+  'mednext-accel @ git+https://github.com/nanaHa1003/mednext-accel.git'
 ```
 
-Install optional features as needed:
+Install optional features from the same repository as needed:
 
 ```bash
-python -m pip install '.[accelerated]'  # Triton training kernels
-python -m pip install '.[export]'       # ONNX validation/runtime
-python -m pip install '.[monai]'        # compatibility tests; not needed to load weights
+python -m pip install \
+  'mednext-accel[accelerated] @ git+https://github.com/nanaHa1003/mednext-accel.git'
+python -m pip install \
+  'mednext-accel[export] @ git+https://github.com/nanaHa1003/mednext-accel.git'
+python -m pip install \
+  'mednext-accel[monai] @ git+https://github.com/nanaHa1003/mednext-accel.git'
 ```
 
 ## Build a model
@@ -127,6 +133,11 @@ Factories are available for Small, Base, Medium, and Large. Stage zero is full
 resolution and stage four is the bottleneck. `CheckpointConfig(stages=None)`
 checkpoints every expansion branch. Checkpointing runs only during gradient
 enabled training and does not change state-dict keys.
+
+Use `CheckpointConfig(style="block")` to checkpoint every complete MedNeXt and
+resampling block. `stages=(...)` can restrict either style to selected resolution
+levels. Whole-block checkpointing saves more activation memory at a higher
+recomputation cost.
 
 With deep supervision enabled, training returns a tuple by default. `list` and
 upsampled `stacked` formats are optional. Evaluation always returns one primary

@@ -7,6 +7,7 @@ from typing import Literal
 import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
+from torch.utils.checkpoint import checkpoint
 
 from ..checkpointing import CheckpointConfig
 from .blocks import MedNeXtBlock, MedNeXtDownBlock, MedNeXtUpBlock, OutputHead
@@ -38,8 +39,12 @@ class MedNeXtV1(nn.Module):
         self.stem = conv(config.in_channels, config.base_channels, kernel_size=1)
         channels = tuple(config.base_channels * (2**stage) for stage in range(5))
 
-        def checkpoint_at(stage: int) -> bool:
-            return checkpointing is not None and checkpointing.includes(stage)
+        def checkpoint_expansion_at(stage: int) -> bool:
+            return (
+                checkpointing is not None
+                and checkpointing.checkpoints_expansion
+                and checkpointing.includes(stage)
+            )
 
         self.encoder_stages = nn.ModuleList(
             [
@@ -52,7 +57,7 @@ class MedNeXtV1(nn.Module):
                             expansion_ratio=config.expansion_ratios[stage],
                             kernel_size=config.kernel_size,
                             residual=config.residual_blocks,
-                            checkpoint_expansion=checkpoint_at(stage),
+                            checkpoint_expansion=checkpoint_expansion_at(stage),
                             approximate_gelu_eval=approximate_gelu_eval,
                         )
                         for _ in range(config.block_counts[stage])
@@ -70,7 +75,7 @@ class MedNeXtV1(nn.Module):
                     expansion_ratio=config.downsample_expansion_ratios[stage],
                     kernel_size=config.kernel_size,
                     residual=config.residual_resampling,
-                    checkpoint_expansion=checkpoint_at(stage + 1),
+                    checkpoint_expansion=checkpoint_expansion_at(stage + 1),
                     approximate_gelu_eval=approximate_gelu_eval,
                 )
                 for stage in range(4)
@@ -85,7 +90,7 @@ class MedNeXtV1(nn.Module):
                     expansion_ratio=config.expansion_ratios[4],
                     kernel_size=config.kernel_size,
                     residual=config.residual_blocks,
-                    checkpoint_expansion=checkpoint_at(4),
+                    checkpoint_expansion=checkpoint_expansion_at(4),
                     approximate_gelu_eval=approximate_gelu_eval,
                 )
                 for _ in range(config.block_counts[4])
@@ -106,7 +111,7 @@ class MedNeXtV1(nn.Module):
                     expansion_ratio=ratio,
                     kernel_size=config.kernel_size,
                     residual=config.residual_resampling,
-                    checkpoint_expansion=checkpoint_at(stage),
+                    checkpoint_expansion=checkpoint_expansion_at(stage),
                     approximate_gelu_eval=approximate_gelu_eval,
                 )
             )
@@ -120,7 +125,7 @@ class MedNeXtV1(nn.Module):
                             expansion_ratio=ratio,
                             kernel_size=config.kernel_size,
                             residual=config.residual_blocks,
-                            checkpoint_expansion=checkpoint_at(stage),
+                            checkpoint_expansion=checkpoint_expansion_at(stage),
                             approximate_gelu_eval=approximate_gelu_eval,
                         )
                         for _ in range(config.block_counts[config_index])
@@ -144,22 +149,43 @@ class MedNeXtV1(nn.Module):
                 for stage in (4, 3, 2, 1)
             )
 
+    def _forward_module(self, module: nn.Module, x: Tensor, stage: int) -> Tensor:
+        config = self.checkpointing
+        if (
+            config is not None
+            and config.checkpoints_blocks
+            and config.includes(stage)
+            and self.training
+            and torch.is_grad_enabled()
+        ):
+            return checkpoint(module, x, use_reentrant=False)
+        return module(x)
+
+    def _forward_stage(self, modules: nn.Sequential, x: Tensor, stage: int) -> Tensor:
+        for module in modules:
+            x = self._forward_module(module, x, stage)
+        return x
+
     def forward(self, x: Tensor) -> Tensor | tuple[Tensor, ...] | list[Tensor]:
         x = self.stem(x)
         skips: list[Tensor] = []
-        for encoder, downsample in zip(self.encoder_stages, self.downsamples, strict=True):
-            x = encoder(x)
+        for stage, (encoder, downsample) in enumerate(
+            zip(self.encoder_stages, self.downsamples, strict=True)
+        ):
+            x = self._forward_stage(encoder, x, stage)
             skips.append(x)
-            x = downsample(x)
+            x = self._forward_module(downsample, x, stage + 1)
 
-        x = self.bottleneck(x)
+        x = self._forward_stage(self.bottleneck, x, 4)
         auxiliary: list[Tensor] = []
         for index, (upsample, decoder) in enumerate(
             zip(self.upsamples, self.decoder_stages, strict=True)
         ):
+            stage = 3 - index
             if self.training and self.config.deep_supervision:
                 auxiliary.append(self.deep_supervision_heads[index](x))
-            x = decoder(upsample(x) + skips[-1 - index])
+            x = self._forward_module(upsample, x, stage) + skips[-1 - index]
+            x = self._forward_stage(decoder, x, stage)
 
         primary = self.head(x)
         if not self.training or not self.config.deep_supervision:

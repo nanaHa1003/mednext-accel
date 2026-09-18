@@ -38,6 +38,15 @@ def test_checkpoint_stages_are_canonicalized() -> None:
     assert config.stages == (0, 1, 2)
 
 
-def test_checkpoint_config_rejects_disabled_expansion_with_stages() -> None:
-    with pytest.raises(ValueError, match="expansion"):
-        CheckpointConfig(expansion=False, stages=(0,))
+def test_whole_block_checkpointing_accepts_resolution_stages() -> None:
+    config = CheckpointConfig(style="block", stages=(2, 0, 1))
+
+    assert config.style == "block"
+    assert config.stages == (0, 1, 2)
+    assert config.checkpoints_blocks
+    assert not config.checkpoints_expansion
+
+
+def test_unknown_checkpoint_style_is_rejected() -> None:
+    with pytest.raises(ValueError, match="style"):
+        CheckpointConfig(style="whole")  # type: ignore[arg-type]

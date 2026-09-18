@@ -35,10 +35,17 @@ three runs after warmup. Compiler cold-start time is excluded.
 | MONAI | Native | Yes | None | 73.676, 73.979, 73.836 | 73.836 ± 0.152 ms | 8,298 MiB |
 | MedNeXt-Accel | PyTorch reference | Yes | None | 74.141, 74.059, 73.949 | 74.059 ± 0.096 ms | 8,339 MiB |
 | MedNeXt-Accel | Conservative | Yes | None | 59.343, 59.464, 59.584 | 59.464 ± 0.121 ms | 8,339 MiB |
-| Official | Native | Yes | Whole block | 84.772, 85.156, 85.381 | 85.156 ± 0.308 ms | 3,236 MiB |
-| MedNeXt-Accel | Conservative | Yes | Stage `(0,)` | 62.833, 62.818, 63.025 | 62.833 ± 0.115 ms | 5,795 MiB |
-| MedNeXt-Accel | Conservative | Yes | Stages `(0, 1)` | 63.584, 63.981, 64.077 | 63.981 ± 0.261 ms | 4,359 MiB |
-| MedNeXt-Accel | Conservative | Yes | All expansion stages | 64.528, 64.287, 64.279 | 64.287 ± 0.142 ms | 3,763 MiB |
+| Official | Native | Yes | Whole block | 84.919, 84.933, 84.847 | 84.919 ± 0.046 ms | 3,236 MiB |
+| MedNeXt-Accel | Conservative | Yes | Stage `(0,)` | 62.488, 62.726, 62.544 | 62.544 ± 0.125 ms | 5,795 MiB |
+| MedNeXt-Accel | Conservative | Yes | Stages `(0, 1)` | 63.808, 63.777, 63.677 | 63.777 ± 0.069 ms | 4,358 MiB |
+| MedNeXt-Accel | Conservative | Yes | All expansion stages | 64.261, 64.225, 64.261 | 64.261 ± 0.021 ms | 3,762 MiB |
+| MedNeXt-Accel | Conservative | Yes | Whole block | 72.538, 72.589, 72.553 | 72.553 ± 0.026 ms | 3,235 MiB |
+
+Whole-block checkpointing is exposed as `CheckpointConfig(style="block")`. It
+matches the official policy's peak allocation within 1 MiB while taking 14.6%
+less step time. All-expansion checkpointing remains the faster intermediate
+point: it is 11.5% faster than MedNeXt-Accel whole-block at a 527 MiB memory
+cost.
 
 The official and MedNeXt-Accel reference implementations differ by only 0.1%
 when compiled. This is a useful control: the 19.6% reduction from 73.977 to
@@ -50,8 +57,8 @@ The official Base factory does not enable checkpointing, although its underlying
 model class accepts `checkpoint_style="outside_block"`; that explicit setting is
 used for the whole-block row. The published Medium and Large factories enable
 this policy. MONAI 1.5.2 has no activation-checkpointing argument or branch in
-its MedNeXt model. MedNeXt-Accel checkpoints only the expanded branch and can
-select resolution stages independently.
+its MedNeXt model. MedNeXt-Accel supports expansion-branch and whole-block
+policies, and can select resolution stages for either one.
 
 ## Reproduce
 
