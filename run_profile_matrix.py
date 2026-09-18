@@ -33,6 +33,16 @@ CASES = {
     'compile_ckpt': ['--checkpoint', '--cudnn-benchmark', '--compile'],
 }
 
+SOURCE_FILES = (
+    'activation_checkpoint.py',
+    'mednext.py',
+    'profile_mednext.py',
+    'run_profile_matrix.py',
+    'summarize_profiles.py',
+    'pointwise_gemm.py',
+    'depthwise_split.py',
+)
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -130,9 +140,7 @@ def main():
     environment = json.loads(json.dumps(environment))
     manifest = {'environment': environment, 'runs': plan,
                 'source_sha256': {name: hashlib.sha256((here / name).read_bytes()).hexdigest()
-                                  for name in ['mednext.py', 'profile_mednext.py',
-                                               'run_profile_matrix.py', 'summarize_profiles.py',
-                                               'pointwise_gemm.py', 'depthwise_split.py']}}
+                                  for name in SOURCE_FILES}}
     manifest_path = output / 'manifest.json'
     if manifest_path.exists():
         if not args.resume:

@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 
+import run_profile_matrix
 import summarize_profiles
 
 
@@ -64,6 +65,12 @@ class ProfilingCheckpointPolicyTests(unittest.TestCase):
             self.assertEqual(settings["effective_checkpoint_style"], "expanded")
             self.assertEqual(settings["effective_checkpoint_levels"], [0, 1])
             self.assertFalse(settings["checkpoint"])
+            summary = json.loads((output / "summary.json").read_text())
+            self.assertIsNotNone(summary["activation_checkpoint_sha256"])
+
+    def test_matrix_manifest_tracks_checkpoint_policy_source(self):
+        self.assertIn(
+            "activation_checkpoint.py", run_profile_matrix.SOURCE_FILES)
 
     def test_profiler_rejects_levels_with_nonexpanded_policy(self):
         for checkpoint_flag in ("--no-checkpoint", "--checkpoint"):

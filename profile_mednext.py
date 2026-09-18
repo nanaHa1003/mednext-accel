@@ -208,6 +208,9 @@ def main():
         'cpu_threads': torch.get_num_threads(),
         'cuda_visible_devices': os.environ.get('CUDA_VISIBLE_DEVICES'),
         'model_sha256': hashlib.sha256(Path(mednext.__file__).read_bytes()).hexdigest(),
+        'activation_checkpoint_sha256': hashlib.sha256(
+            Path(__file__).with_name('activation_checkpoint.py').read_bytes()
+        ).hexdigest(),
         'profiler_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         'pointwise_replacements': pointwise_replacements,
         'depthwise_replacements': depthwise_replacements,
