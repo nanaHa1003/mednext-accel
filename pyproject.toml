@@ -1,0 +1,53 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mednext-accel"
+version = "0.1.0a0"
+description = "Accelerated and production-ready MedNeXt models for PyTorch"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+authors = [{ name = "MedNeXt-Accel contributors" }]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = ["torch>=2.6"]
+
+[project.optional-dependencies]
+accelerated = ["triton"]
+export = ["onnx>=1.16", "onnxscript>=0.2", "onnxruntime>=1.18"]
+monai = ["monai>=1.5"]
+test = ["pytest>=8"]
+dev = ["build>=1.2", "pytest>=8", "ruff>=0.8", "twine>=5"]
+
+[project.urls]
+Repository = "https://github.com/placeholder/mednext-accel"
+Issues = "https://github.com/placeholder/mednext-accel/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mednext_accel"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = [
+  "cuda: requires a CUDA device",
+  "onnx: requires ONNX export dependencies",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+

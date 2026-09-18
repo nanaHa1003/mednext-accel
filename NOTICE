@@ -1,0 +1,10 @@
+MedNeXt-Accel
+Copyright 2026 MedNeXt-Accel contributors
+
+This product includes software derived from the MedNeXt project by the German
+Cancer Research Center (DKFZ), licensed under the Apache License, Version 2.0.
+
+Compatibility information and tests may refer to MONAI, which is licensed under
+the Apache License, Version 2.0. MONAI is not a runtime dependency of this
+package.
+

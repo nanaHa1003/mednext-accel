@@ -34,6 +34,18 @@ torch_compile_debug/
 
 # Local worktrees and editor files
 .worktrees/
+
+# Package and test outputs
+dist/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+artifacts/
+*.onnx
+*.pt
+*.pth
+*.model
 .idea/
 .vscode/
 *.swp
