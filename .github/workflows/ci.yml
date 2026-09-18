@@ -34,4 +34,3 @@ jobs:
         run: python -m build
       - name: Check package metadata
         run: twine check dist/*
-

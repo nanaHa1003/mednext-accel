@@ -1,8 +1,10 @@
 # MedNeXt-Accel Package Design
 
-**Status:** Approved for implementation  
-**Date:** 2026-09-18  
-**Distribution:** `mednext-accel`  
+**Status:** Approved for implementation
+
+**Date:** 2026-09-18
+
+**Distribution:** `mednext-accel`
 **Import namespace:** `mednext_accel`
 
 ## Purpose and scope
