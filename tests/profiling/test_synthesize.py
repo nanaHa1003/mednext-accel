@@ -52,3 +52,49 @@ def test_invalid_candidate_and_memory_objective_choose_safely() -> None:
 def test_reported_winner_uses_the_same_balanced_threshold_as_synthesis() -> None:
     assert not candidate_wins(measured(2, 100.0, 99.0), "balanced")
     assert candidate_wins(measured(2, 100.0, 96.0), "balanced")
+
+
+def test_raw_result_materialization_restores_context_and_uses_planned_identity():
+    from mednext_accel.profiling import synthesize
+    from mednext_accel.profiling.matrix import KernelCase, KernelCaseKey
+
+    case = KernelCase(
+        KernelCaseKey(
+            family="depthwise_conv3d",
+            direction="regular",
+            phase="backward_weight",
+            batch=2,
+            spatial_shape=(128, 128, 128),
+            in_channels=32,
+            out_channels=32,
+            kernel_size=3,
+            dtype="bfloat16",
+            implementation="triton_split_dw",
+            parameters=(("dw_splits", 128), ("dw_block", 512)),
+        )
+    )
+    raw = {
+        "status": "ok",
+        "valid": True,
+        "reference_ms": 10,
+        "candidate_ms": 8,
+        "reference_peak_bytes": 100,
+        "candidate_peak_bytes": 90,
+        "parameters": [],
+        "implementation": "untrusted",
+        "checkpointing": "none",
+    }
+    item = synthesize.measurement_from_result(case, raw, checkpointing="all-expansion")
+
+    assert item.checkpointing == "all-expansion"
+    assert item.parameters == (("dw_splits", 128), ("dw_block", 512))
+    assert item.implementation == "triton_split_dw"
+    assert item.valid and item.reference_ms == 10.0 and item.candidate_ms == 8.0
+    assert item.reference_peak_bytes == 100 and item.candidate_peak_bytes == 90
+    assert raw["checkpointing"] == "none"
+
+    for failed in ({}, {**raw, "status": "error"}):
+        item = synthesize.measurement_from_result(case, failed, checkpointing="none")
+        assert not item.valid
+        assert item.reference_ms == item.candidate_ms == 0.0
+        assert item.reference_peak_bytes == item.candidate_peak_bytes == 0

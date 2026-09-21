@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from typing import Literal
 
 from ..optimization.schema import OptimizationProfile, parse_profile
+from .matrix import KernelCase
 
 Objective = Literal["balanced", "throughput", "memory"]
 
@@ -31,6 +33,39 @@ class Measurement:
 
     def to_primitive(self) -> dict[str, object]:
         return asdict(self)
+
+
+def measurement_from_result(
+    case: KernelCase,
+    result: Mapping[str, object],
+    *,
+    checkpointing: str,
+) -> Measurement:
+    """Materialize context-free evidence for one workload reference.
+
+    Failed or absent results retain their planned identity with zero metrics,
+    ensuring synthesis explicitly falls back to the reference implementation.
+    """
+    ok = result.get("status") == "ok"
+    key = case.key
+    return Measurement(
+        family=key.family,
+        direction=key.direction,
+        phase=key.phase,
+        implementation=key.implementation,
+        batch=key.batch,
+        spatial_shape=key.spatial_shape,
+        in_channels=key.in_channels,
+        out_channels=key.out_channels,
+        dtype=key.dtype,
+        checkpointing=checkpointing,
+        reference_ms=float(result.get("reference_ms", 0.0)) if ok else 0.0,
+        candidate_ms=float(result.get("candidate_ms", 0.0)) if ok else 0.0,
+        reference_peak_bytes=int(result.get("reference_peak_bytes", 0)) if ok else 0,
+        candidate_peak_bytes=int(result.get("candidate_peak_bytes", 0)) if ok else 0,
+        valid=ok and bool(result.get("valid", False)),
+        parameters=key.parameters,
+    )
 
 
 def candidate_wins(item: Measurement, objective: Objective) -> bool:

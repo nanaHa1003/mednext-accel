@@ -1,4 +1,4 @@
-"""GPU campaign orchestration with one subprocess per memory-sensitive probe."""
+"""GPU campaign orchestration with shared kernel evidence and isolated model probes."""
 
 from __future__ import annotations
 
@@ -6,15 +6,23 @@ import argparse
 import gc
 import json
 import sys
-from dataclasses import asdict, replace
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass
 
 from ..optimization.schema import profile_to_primitive
 from .batch_search import ProbeResult, search_batches
 from .benchmark import run_json_subprocess
 from .campaign import Campaign, Workload
-from .execution import WorkloadShapes
+from .execution import BatchSearchResult, WorkloadShapes, build_execution_plan
+from .grouped import run_group_with_bisection
 from .progress import ProgressEvent, ProgressReporter
-from .synthesize import Measurement, candidate_wins, synthesize_profile
+from .synthesize import Measurement, measurement_from_result, synthesize_profile
+from .validation import (
+    apply_validation_results,
+    decision_signature,
+    segment_decisions,
+    validation_batches,
+)
 
 
 def _checkpoint(value: str):
@@ -468,10 +476,13 @@ def _batches(
 
 def _whole_model_accepts(
     objective: str,
-    reference: dict[str, object],
-    candidate: dict[str, object],
+    reference: Mapping[str, object],
+    candidate: Mapping[str, object],
 ) -> bool:
-    if candidate.get("status") != "ok":
+    if any(
+        result.get("status") != "ok" or not {"step_ms", "peak_bytes"} <= result.keys()
+        for result in (reference, candidate)
+    ):
         return False
     reference_ms = float(reference["step_ms"])
     candidate_ms = float(candidate["step_ms"])
@@ -484,192 +495,110 @@ def _whole_model_accepts(
     return candidate_ms < reference_ms and candidate_peak <= reference_peak * 1.15
 
 
-def run_campaign(
-    campaign: Campaign, progress: ProgressReporter | None = None
-) -> tuple[Measurement, ...]:
+@dataclass(frozen=True, slots=True)
+class ExecutionStatistics:
+    """Planned logical cases and completed physical execution attempts.
+
+    ``kernel_group_count`` includes failed and bisected child attempts, while
+    ``whole_model_validation_count`` excludes the reference batch search.
+    """
+
+    requested_case_count: int
+    kernel_case_count: int
+    kernel_group_count: int
+    whole_model_validation_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class CampaignRun:
+    measurements: tuple[Measurement, ...]
+    statistics: ExecutionStatistics
+
+
+def execute_campaign(campaign: Campaign, progress: ProgressReporter | None = None) -> CampaignRun:
+    """Execute shared kernel groups and validate each workload's decision boundaries."""
     import torch
 
     if not torch.cuda.is_available():
         raise RuntimeError("profiling requires an NVIDIA CUDA device")
     device = torch.cuda.current_device()
     total_vram = torch.cuda.get_device_properties(device).total_memory
-    measurements: list[Measurement] = []
-    for workload_index, workload in enumerate(campaign.workloads, 1):
-        workload_message = (
-            f"{workload_index}/{len(campaign.workloads)} · {workload.variant} · "
-            f"{workload.spatial} · {workload.checkpointing}"
-        )
-        if progress is None:
-            print(
-                f"[{workload_index}/{len(campaign.workloads)}] {workload.variant} "
-                f"{workload.spatial} {workload.checkpointing}",
-                file=sys.stderr,
-            )
-        else:
-            progress.emit(ProgressEvent("workload", "workload", message=workload_message))
-            progress.emit(
-                ProgressEvent(
-                    "stage_start", "batch-search", message="Batch search · estimating workload"
-                )
-            )
-        batches, reference_steps = _batches(campaign, workload, total_vram, progress=progress)
-        workload_shapes = discover_workload_shapes(workload)
-        shapes = workload_shapes.pointwise
-        depthwise_shapes = workload_shapes.depthwise
-        depthwise_probe_count = sum(
-            1 if direction in ("transpose", "downsample") else 2
-            for direction, *_ in depthwise_shapes
-        )
-        operator_total = len(batches) * (len(shapes) + depthwise_probe_count + 1)
-        operator_completed = 0
+
+    def search(workload: Workload) -> BatchSearchResult:
         if progress is not None:
             progress.emit(
                 ProgressEvent(
-                    "stage_start",
-                    "operators",
-                    total=operator_total,
-                    message=workload_message,
+                    "workload",
+                    "workload",
+                    message=f"{workload.variant} · {workload.spatial} · {workload.checkpointing}",
+                )
+            )
+            progress.emit(ProgressEvent("stage_start", "batch-search"))
+        batches, reference_steps = _batches(campaign, workload, total_vram, progress=progress)
+        return BatchSearchResult(batches, reference_steps)
+
+    plan = build_execution_plan(campaign, discover=discover_workload_shapes, search=search)
+    raw_results: dict[str, dict[str, object]] = {}
+    group_attempts = 0
+    group_total = len(plan.kernel_groups)
+    if progress is not None:
+        progress.emit(ProgressEvent("stage_start", "kernel-groups", total=group_total))
+
+    def on_attempt(event: str, attempts: int, resolved_cases: int) -> None:
+        nonlocal group_attempts, group_total
+        if event == "scheduled":
+            group_total += attempts
+        else:
+            group_attempts += attempts
+        if progress is not None:
+            progress.emit(
+                ProgressEvent(
+                    "advance",
+                    "kernel-groups",
+                    completed=group_attempts,
+                    total=group_total,
                 )
             )
 
-        def advance(message: str, total: int = operator_total) -> None:
-            nonlocal operator_completed
-            operator_completed += 1
-            if progress is not None:
-                progress.emit(
-                    ProgressEvent(
-                        "advance",
-                        "operators",
-                        completed=operator_completed,
-                        total=total,
-                        message=message,
-                    )
-                )
+    for group in plan.kernel_groups:
+        raw_results.update(run_group_with_bisection(group, _invoke, on_attempt=on_attempt))
 
-        def starting(message: str) -> None:
-            if progress is not None:
-                progress.emit(
-                    ProgressEvent("item_start", "operators", message=f"running · {message}")
-                )
-
-        for batch in batches:
-            batch_measurements: list[Measurement] = []
-            for in_channels, out_channels, spatial in shapes:
-                starting(f"batch={batch} pointwise_conv3d/training {spatial}")
-                result = _invoke(
-                    {
-                        "kind": "pointwise",
-                        "batch": batch,
-                        "in_channels": in_channels,
-                        "out_channels": out_channels,
-                        "spatial_shape": spatial,
-                    }
-                )
-                if result.get("status") != "ok":
-                    advance(
-                        f"batch={batch} pointwise_conv3d/training {spatial} · "
-                        f"{result.get('status', 'failed')}"
-                    )
-                    continue
-                measurement = Measurement(
-                    family="pointwise_conv3d",
-                    direction="regular",
-                    phase="training",
-                    implementation="pointwise_gemm_per_sample",
-                    batch=batch,
-                    spatial_shape=spatial,
-                    in_channels=in_channels,
-                    out_channels=out_channels,
-                    dtype="bfloat16",
-                    checkpointing=workload.checkpointing,
-                    reference_ms=float(result["reference_ms"]),
-                    candidate_ms=float(result["candidate_ms"]),
-                    reference_peak_bytes=int(result["reference_peak_bytes"]),
-                    candidate_peak_bytes=int(result["candidate_peak_bytes"]),
-                    valid=bool(result["valid"]),
-                    parameters=tuple(
-                        (str(name), int(value)) for name, value in result["parameters"]
-                    ),
-                )
-                batch_measurements.append(measurement)
-                choice = (
-                    "candidate" if candidate_wins(measurement, campaign.objective) else "reference"
-                )
-                advance(
-                    f"batch={batch} pointwise_conv3d/training {spatial} · "
-                    f"ref={float(result['reference_ms']):.3f} ms · "
-                    f"candidate={float(result['candidate_ms']):.3f} ms → {choice}"
-                )
-            for direction, channels, kernel, spatial in depthwise_shapes:
-                phases = (
-                    ("backward_weight",)
-                    if direction == "transpose"
-                    else ("backward_input",)
-                    if direction == "downsample"
-                    else ("backward_input", "backward_weight")
-                )
-                for phase in phases:
-                    starting(f"batch={batch} depthwise/{direction}/{phase} {spatial}")
-                    result = _invoke(
-                        {
-                            "kind": "depthwise",
-                            "batch": batch,
-                            "in_channels": channels,
-                            "kernel_size": kernel,
-                            "spatial_shape": spatial,
-                            "direction": direction,
-                            "phase": phase,
-                        }
-                    )
-                    if result.get("status") != "ok":
-                        advance(
-                            f"batch={batch} depthwise/{direction}/{phase} {spatial} · "
-                            f"{result.get('status', 'failed')}"
-                        )
-                        continue
-                    family = (
-                        "depthwise_conv_transpose3d"
-                        if direction == "transpose"
-                        else "depthwise_conv3d"
-                    )
-                    measurement = Measurement(
-                        family=family,
-                        direction=direction,
-                        phase=phase,
-                        implementation=str(result["implementation"]),
-                        batch=batch,
-                        spatial_shape=spatial,
-                        in_channels=channels,
-                        out_channels=channels,
-                        dtype="bfloat16",
-                        checkpointing=workload.checkpointing,
-                        reference_ms=float(result["reference_ms"]),
-                        candidate_ms=float(result["candidate_ms"]),
-                        reference_peak_bytes=int(result["reference_peak_bytes"]),
-                        candidate_peak_bytes=int(result["candidate_peak_bytes"]),
-                        valid=bool(result["valid"]),
-                        parameters=tuple(
-                            (str(name), int(value)) for name, value in result["parameters"]
-                        ),
-                    )
-                    batch_measurements.append(measurement)
-                    choice = (
-                        "candidate"
-                        if candidate_wins(measurement, campaign.objective)
-                        else "reference"
-                    )
-                    advance(
-                        f"batch={batch} depthwise/{direction}/{phase} {spatial} · "
-                        f"ref={float(result['reference_ms']):.3f} ms · "
-                        f"candidate={float(result['candidate_ms']):.3f} ms → {choice}"
-                    )
-            provisional = synthesize_profile(
-                [*measurements, *batch_measurements],
-                name="campaign-candidate",
-                sm=torch.cuda.get_device_capability(),
-                objective=campaign.objective,
+    cases_by_key = {case.key: case for case in plan.kernel_cases}
+    measurements: list[Measurement] = []
+    validation_count = 0
+    for workload_run in plan.workloads:
+        workload = workload_run.workload
+        context_measurements = tuple(
+            measurement_from_result(
+                cases_by_key[key],
+                raw_results.get(cases_by_key[key].identifier, {}),
+                checkpointing=workload.checkpointing,
             )
-            starting(f"batch={batch} whole-model validation")
+            for key in workload_run.case_keys
+        )
+        by_batch: dict[int, list[Measurement]] = {batch: [] for batch in workload_run.batches}
+        for item in context_measurements:
+            by_batch[item.batch].append(item)
+        segments = segment_decisions(
+            {
+                batch: decision_signature(items, campaign.objective)
+                for batch, items in by_batch.items()
+            }
+        )
+        endpoints = validation_batches(segments)
+        if not endpoints:
+            measurements.extend(context_measurements)
+            continue
+        provisional = synthesize_profile(
+            context_measurements,
+            name="campaign-candidate",
+            sm=torch.cuda.get_device_capability(),
+            objective=campaign.objective,
+        )
+        if progress is not None:
+            progress.emit(ProgressEvent("stage_start", "validation", total=len(endpoints)))
+        accepted: dict[int, bool] = {}
+        for completed, batch in enumerate(endpoints, 1):
             candidate_step = _invoke(
                 {
                     "kind": "model",
@@ -679,27 +608,38 @@ def run_campaign(
                     "optimization": profile_to_primitive(provisional),
                 }
             )
-            reference_step = reference_steps[batch]
-            accepted = _whole_model_accepts(campaign.objective, reference_step, candidate_step)
-            candidate_summary = (
-                f"{float(candidate_step['step_ms']):.3f} ms"
-                if candidate_step.get("status") == "ok"
-                else str(candidate_step.get("status"))
+            validation_count += 1
+            accepted[batch] = _whole_model_accepts(
+                campaign.objective, workload_run.reference_steps.get(batch, {}), candidate_step
             )
-            advance(
-                f"batch={batch} whole-model validation · "
-                f"ref={float(reference_step['step_ms']):.3f} ms · "
-                f"candidate={candidate_summary} → {'accepted' if accepted else 'rejected'}"
-            )
-            if not accepted:
-                batch_measurements = [replace(item, valid=False) for item in batch_measurements]
-                if progress is None:
-                    print(
-                        f"  batch {batch}: isolated winners rejected by whole-model validation",
-                        file=sys.stderr,
+            if progress is not None:
+                progress.emit(
+                    ProgressEvent(
+                        "advance",
+                        "validation",
+                        completed=completed,
+                        total=len(endpoints),
+                        message=f"batch={batch} {'accepted' if accepted[batch] else 'rejected'}",
                     )
-            measurements.extend(batch_measurements)
-    return tuple(measurements)
+                )
+        measurements.extend(apply_validation_results(context_measurements, segments, accepted))
+
+    return CampaignRun(
+        measurements=tuple(measurements),
+        statistics=ExecutionStatistics(
+            requested_case_count=plan.requested_case_count,
+            kernel_case_count=len(plan.kernel_cases),
+            kernel_group_count=group_attempts,
+            whole_model_validation_count=validation_count,
+        ),
+    )
+
+
+def run_campaign(
+    campaign: Campaign, progress: ProgressReporter | None = None
+) -> tuple[Measurement, ...]:
+    """Return schema-v1 measurements for callers using the original runner API."""
+    return execute_campaign(campaign, progress=progress).measurements
 
 
 def main(argv: list[str] | None = None) -> int:
