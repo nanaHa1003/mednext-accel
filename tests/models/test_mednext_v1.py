@@ -14,6 +14,7 @@ from mednext_accel import (
     mednext_medium,
     mednext_small,
 )
+from mednext_accel.ops.adaptive import AdaptivePointwise3d
 
 
 @pytest.mark.parametrize(
@@ -156,3 +157,56 @@ def test_approximate_gelu_is_eval_only() -> None:
 
     assert activations == []
     assert any(module.__class__.__name__ == "EvalModeGELU" for module in model.modules())
+
+
+def test_factory_defaults_to_auto_and_reference_is_explicit() -> None:
+    auto = mednext_base(in_channels=1, out_channels=3, base_channels=2)
+    reference = mednext_base(
+        in_channels=1, out_channels=3, base_channels=2, optimization="reference"
+    )
+    assert auto.optimization_source == "auto"
+    assert any(isinstance(module, AdaptivePointwise3d) for module in auto.modules())
+    assert not any(isinstance(module, AdaptivePointwise3d) for module in reference.modules())
+    assert tuple(auto.state_dict()) == tuple(reference.state_dict())
+
+
+@pytest.mark.parametrize("mode", ["torch", "conservative", "autotune", "missing"])
+def test_invalid_optimization_mode_is_rejected(mode: str) -> None:
+    with pytest.raises((ValueError, FileNotFoundError)):
+        mednext_small(in_channels=1, out_channels=2, optimization=mode)
+
+
+def test_explain_optimization_reports_batch_three_gemm() -> None:
+    model = mednext_base(in_channels=1, out_channels=3)
+    report = model.explain_optimization(
+        input_shape=(3, 1, 128, 128, 128), dtype="bfloat16", device="cuda:0"
+    )
+    assert any(
+        decision.implementation == "pointwise_gemm_per_sample"
+        for decision in report.decisions
+    )
+    assert any(
+        decision.descriptor.in_channels == 32
+        and decision.descriptor.out_channels == 96
+        and decision.implementation == "pointwise_gemm_per_sample"
+        for decision in report.decisions
+    )
+
+
+@pytest.mark.parametrize(
+    "config, expected",
+    [
+        (None, "none"),
+        (CheckpointConfig(), "all-expansion"),
+        (CheckpointConfig(style="block"), "whole-block"),
+        (CheckpointConfig(stages=(0, 1)), "expansion:0,1"),
+    ],
+)
+def test_optimization_report_uses_campaign_checkpoint_names(config, expected) -> None:
+    model = mednext_small(
+        in_channels=1, out_channels=2, base_channels=2, checkpointing=config
+    )
+    report = model.explain_optimization(
+        input_shape=(1, 1, 32, 32, 32), dtype="bfloat16", device="cpu"
+    )
+    assert report.context.checkpointing == expected

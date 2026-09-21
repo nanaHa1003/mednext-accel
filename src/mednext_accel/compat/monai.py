@@ -6,7 +6,12 @@ from typing import Literal
 
 from ..checkpointing import CheckpointConfig
 from ..models.config import get_mednext_v1_config
-from ..models.mednext_v1 import DeepSupervisionOutput, MedNeXtV1
+from ..models.mednext_v1 import (
+    DeepSupervisionOutput,
+    MedNeXtV1,
+    OptimizationSource,
+    _configure_optimization,
+)
 
 
 def _factory(
@@ -21,6 +26,7 @@ def _factory(
     checkpointing: CheckpointConfig | None = None,
     deep_supervision_output: DeepSupervisionOutput = "tuple",
     approximate_gelu_eval: bool = False,
+    optimization: OptimizationSource = "auto",
 ) -> MedNeXtV1:
     config = get_mednext_v1_config(
         variant,
@@ -32,12 +38,13 @@ def _factory(
         deep_supervision=deep_supervision,
         compatibility="monai",
     )
-    return MedNeXtV1(
+    model = MedNeXtV1(
         config,
         checkpointing=checkpointing,
         deep_supervision_output=deep_supervision_output,
         approximate_gelu_eval=approximate_gelu_eval,
     )
+    return _configure_optimization(model, optimization)
 
 
 def _named_factory(
@@ -52,6 +59,7 @@ def _named_factory(
     checkpointing: CheckpointConfig | None,
     deep_supervision_output: DeepSupervisionOutput,
     approximate_gelu_eval: bool,
+    optimization: OptimizationSource,
 ) -> MedNeXtV1:
     return _factory(
         variant,
@@ -64,6 +72,7 @@ def _named_factory(
         checkpointing=checkpointing,
         deep_supervision_output=deep_supervision_output,
         approximate_gelu_eval=approximate_gelu_eval,
+        optimization=optimization,
     )
 
 
@@ -78,6 +87,7 @@ def monai_mednext_small(
     checkpointing: CheckpointConfig | None = None,
     deep_supervision_output: DeepSupervisionOutput = "tuple",
     approximate_gelu_eval: bool = False,
+    optimization: OptimizationSource = "auto",
 ) -> MedNeXtV1:
     return _named_factory(
         "small",
@@ -90,6 +100,7 @@ def monai_mednext_small(
         checkpointing=checkpointing,
         deep_supervision_output=deep_supervision_output,
         approximate_gelu_eval=approximate_gelu_eval,
+        optimization=optimization,
     )
 
 
@@ -104,6 +115,7 @@ def monai_mednext_base(
     checkpointing: CheckpointConfig | None = None,
     deep_supervision_output: DeepSupervisionOutput = "tuple",
     approximate_gelu_eval: bool = False,
+    optimization: OptimizationSource = "auto",
 ) -> MedNeXtV1:
     return _named_factory(
         "base",
@@ -116,6 +128,7 @@ def monai_mednext_base(
         checkpointing=checkpointing,
         deep_supervision_output=deep_supervision_output,
         approximate_gelu_eval=approximate_gelu_eval,
+        optimization=optimization,
     )
 
 
@@ -130,6 +143,7 @@ def monai_mednext_medium(
     checkpointing: CheckpointConfig | None = None,
     deep_supervision_output: DeepSupervisionOutput = "tuple",
     approximate_gelu_eval: bool = False,
+    optimization: OptimizationSource = "auto",
 ) -> MedNeXtV1:
     return _named_factory(
         "medium",
@@ -142,6 +156,7 @@ def monai_mednext_medium(
         checkpointing=checkpointing,
         deep_supervision_output=deep_supervision_output,
         approximate_gelu_eval=approximate_gelu_eval,
+        optimization=optimization,
     )
 
 
@@ -156,6 +171,7 @@ def monai_mednext_large(
     checkpointing: CheckpointConfig | None = None,
     deep_supervision_output: DeepSupervisionOutput = "tuple",
     approximate_gelu_eval: bool = False,
+    optimization: OptimizationSource = "auto",
 ) -> MedNeXtV1:
     return _named_factory(
         "large",
@@ -168,6 +184,7 @@ def monai_mednext_large(
         checkpointing=checkpointing,
         deep_supervision_output=deep_supervision_output,
         approximate_gelu_eval=approximate_gelu_eval,
+        optimization=optimization,
     )
 
 

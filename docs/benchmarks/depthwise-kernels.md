@@ -157,10 +157,9 @@ that integration boundary is improved.
 
 ## Per-shape automatic selection
 
-`optimize(..., policy="autotune")` captures the actual spatial shapes created by
-the chosen MedNeXt variant, benchmarks each unique eligible pointwise and
-depthwise shape, and applies only the faster choices. An optional cache is keyed
-by GPU/software/dtype/input/model signature and selector source hash. Parameter
+`mednext-accel profile` discovers the shapes created by the chosen MedNeXt
+variant, benchmarks eligible pointwise and depthwise implementations, validates
+their numerical results, and writes the faster choices into one versioned profile. Parameter
 objects and state-dict keys remain unchanged. The selector requires a CUDA model
 and benchmarks the requested positive batch size; downsample dX remains opt-in
 because its isolated gain did not yet translate to a full compiled-model gain.

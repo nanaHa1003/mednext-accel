@@ -20,7 +20,7 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
-dependencies = ["torch>=2.6"]
+dependencies = ["torch>=2.6", "PyYAML>=6"]
 
 [project.optional-dependencies]
 accelerated = ["triton"]
@@ -32,6 +32,9 @@ dev = ["build>=1.2", "pytest>=8", "ruff>=0.8", "twine>=5"]
 [project.urls]
 Repository = "https://github.com/nanaHa1003/mednext-accel"
 Issues = "https://github.com/nanaHa1003/mednext-accel/issues"
+
+[project.scripts]
+mednext-accel = "mednext_accel.profiling.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mednext_accel"]

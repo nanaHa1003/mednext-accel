@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import json
 import time
-from dataclasses import asdict
 from pathlib import Path
 
 
@@ -19,7 +18,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--base-channels", type=int, default=32)
     parser.add_argument("--kernel-size", type=int, default=3)
     parser.add_argument("--dtype", choices=("fp32", "bf16", "fp16"), default="bf16")
-    parser.add_argument("--policy", choices=("torch", "conservative", "autotune"), default="torch")
+    parser.add_argument("--optimization", choices=("auto", "reference"), default="auto")
     parser.add_argument(
         "--compile-mode",
         choices=(
@@ -37,9 +36,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--steps", type=int, default=10)
     parser.add_argument("--profile-steps", type=int, default=3)
-    parser.add_argument("--autotune-warmup", type=int, default=10)
-    parser.add_argument("--autotune-repetitions", type=int, default=50)
-    parser.add_argument("--include-stride2-dx", action="store_true")
     return parser.parse_args()
 
 
@@ -49,14 +45,12 @@ def main() -> None:
 
     import mednext_accel
     from mednext_accel import CheckpointConfig
-    from mednext_accel.optimization import optimize
 
     if not torch.cuda.is_available():
         raise SystemExit("CUDA is required")
     if args.steps < 1 or args.warmup < 1 or args.profile_steps < 0:
         raise SystemExit("warmup and steps must be positive; profile-steps cannot be negative")
     dtype = {"fp32": torch.float32, "bf16": torch.bfloat16, "fp16": torch.float16}[args.dtype]
-    compile_mode = "default" if args.compile_mode == "none" else args.compile_mode
     checkpointing = (
         None
         if args.checkpoint_stages is None
@@ -71,19 +65,13 @@ def main() -> None:
             kernel_size=args.kernel_size,
             deep_supervision=args.deep_supervision,
             checkpointing=checkpointing,
+            optimization=args.optimization,
         )
         .cuda()
         .train()
     )
-    report = optimize(
-        model,
-        input_shape=tuple(args.shape),
-        dtype=dtype,
-        policy=args.policy,
-        compile_mode=compile_mode,
-        warmup=args.autotune_warmup,
-        repetitions=args.autotune_repetitions,
-        include_stride2_input_grad=args.include_stride2_dx,
+    report = model.explain_optimization(
+        input_shape=tuple(args.shape), dtype=dtype, device="cuda"
     )
     if args.compile_mode != "none":
         model.compile(mode=args.compile_mode, fullgraph=args.fullgraph)
@@ -140,7 +128,22 @@ def main() -> None:
             "cuda": torch.version.cuda,
             "cudnn": torch.backends.cudnn.version(),
         },
-        "optimization": asdict(report),
+        "optimization": {
+            "profile": report.profile,
+            "decisions": [
+                {
+                    "family": item.descriptor.family,
+                    "direction": item.descriptor.direction,
+                    "phase": item.phase,
+                    "implementation": item.implementation,
+                    "parameters": dict(item.parameters),
+                    "rule": item.rule,
+                    "confidence": item.confidence,
+                }
+                for item in report.decisions
+            ],
+            "warnings": list(report.warnings),
+        },
         "step_ms": durations,
         "median_step_ms": sorted(durations)[len(durations) // 2],
         "peak_allocated_bytes": torch.cuda.max_memory_allocated(),

@@ -1,75 +1,95 @@
-# Optimization and compilation
+# Optimization, profiling, and compilation
 
-Model construction is pure PyTorch and has no benchmark or cache side effects.
-Apply an execution policy after moving the model to its training device, and
-before constructing an optimizer, compiling, or wrapping with DDP:
+MedNeXt factories select optimized operators by default:
 
 ```python
-import torch
 from mednext_accel import mednext_base
-from mednext_accel.optimization import optimize
 
-model = mednext_base(in_channels=1, out_channels=3).cuda()
-report = optimize(
-    model,
-    input_shape=(1, 1, 128, 128, 128),
-    dtype=torch.bfloat16,
-    policy="autotune",
-    compile_mode="default",
-)
-model.compile(mode=report.compile_mode, fullgraph=True)
+model = mednext_base(in_channels=1, out_channels=3)
 ```
 
-`torch` disables all installed optional backends. `conservative` selects only
-the BF16, 128-cubed configurations validated end to end on an RTX 5090. Regular
-depthwise dW uses measured batch-aware splits for batches 1, 2, 4, and 6.
-Measured pointwise shapes use independent per-sample GEMMs for batches 2, 4, and
-6; batch one and unmeasured batches retain native pointwise convolution. Other
-hardware and spatial shapes stay on PyTorch. `autotune` measures each unique
-eligible shape using the requested batch size on the current device. Its cache
-key includes model topology, device identity and capability,
-dtype, input shape, PyTorch, CUDA, cuDNN, Triton, package and kernel versions,
-and the planned compile mode.
+`optimization="auto"` loads immutable bundled profiles. It does no timing and
+writes no cache during construction or first forward. `optimization="reference"`
+uses ordinary PyTorch operators. A JSON/YAML path or YAML-compatible mapping
+loads a profile generated elsewhere. Parameters, tensor layouts, and state-dict
+keys are identical in every mode.
 
-The default cache is `~/.cache/mednext_accel/autotune-v1.json`, or beneath
-`XDG_CACHE_HOME` when set. Pass `cache_path=None` to disable it. Writes use an
-atomic replacement, and a corrupt or incompatible cache is ignored and rebuilt.
+Profiles resolve each operator phase separately. Current identifiers cover
+pointwise training, regular depthwise dX and dW, transpose depthwise dW,
+downsample depthwise dX, reference export paths, and opt-in approximate GELU.
+Resolution order is external exact overrides, external rules, exact-SM bundled
+rules, then generic family defaults. Unsupported kernel geometry uses a reported
+correctness guard. Unknown batches and shapes always receive a decision.
 
-Stride-two downsample dX remains excluded unless
-`include_stride2_input_grad=True`; its isolated kernel was faster on RTX 5090,
-but the extra integration boundary made the complete training step slower.
+An external profile records its source SM. A mismatch emits one warning and the
+profile remains active. An unknown NVIDIA SM uses `generic-nvidia`, seeded from
+RTX 5090 measurements, with one warning. This behavior lets users knowingly test
+profiles across machines while keeping the provenance visible.
 
-## torch.compile modes
-
-`compile_mode` records the mode intended for the subsequent `model.compile`
-call. It does not compile the model. Supported values match PyTorch:
-
-- `default` balances compile time, steady-state speed, and memory.
-- `reduce-overhead` uses CUDA Graphs where possible and may retain more device
-  memory.
-- `max-autotune` benchmarks more generated kernels and enables CUDA Graphs on
-  GPU. It has the largest cold compile cost.
-- `max-autotune-no-cudagraphs` performs the broader kernel search without CUDA
-  Graphs.
-
-Use the same mode for every row in a performance comparison, warm up compiled
-graphs before timing, and report cold compilation separately. `fullgraph=True`
-controls graph-break handling and is independent of these modes.
-
-## Checkpoints
-
-Compilation does not change parameter values or shapes. Prefer the in-place
-module API and save the ordinary model state dict:
+Inspect decisions without allocating the requested input:
 
 ```python
-model.compile(mode="default", fullgraph=True)
-torch.save(model.state_dict(), "weights.pt")
+report = model.explain_optimization(
+    input_shape=(3, 1, 128, 128, 128),
+    dtype="bfloat16",
+    device="cuda:0",
+)
 ```
 
-The wrapper returned by `compiled = torch.compile(model)` may prefix state-dict
-keys with `_orig_mod.`. `mednext_accel.checkpoints.load_checkpoint` removes that
-prefix when reading and unwraps a compiled target when writing, so eager and
-compiled-wrapper checkpoints load in either direction. For portable application
-code, save and load the original model rather than depending directly on the
-wrapper's private `_orig_mod` attribute. Compiled kernels live in compiler caches
-and are not part of the checkpoint.
+## Generate a local profile
+
+Run the standalone profiler from an installed package:
+
+```bash
+mednext-accel profile
+```
+
+It detects GPU architecture and VRAM, profiles installed MedNeXt v1 variants,
+and writes one profile to `~/.cache/mednext_accel/profiles/`. Each memory probe
+and kernel benchmark runs in a separate process, so CUDA OOM does not poison the
+campaign. Batch search tests every integer through eight when feasible, expands
+by powers of two, then uses binary refinement at the memory boundary.
+
+A minimal campaign can narrow the workload:
+
+```yaml
+preset: mednext-v1
+workloads:
+  - variant: base
+    spatial: [128, 128, 128]
+    checkpointing: auto
+batch_search:
+  strategy: auto
+  memory_fraction: 0.90
+```
+
+```bash
+mednext-accel profile workload.yaml
+```
+
+`checkpointing: auto` measures no checkpointing, all expansion branches, and
+whole blocks. It does not select checkpointing for application code; the user
+still chooses checkpoint style and batch size. The profiler validates numerical
+results, records latency and peak allocation, merges adjacent batches with the
+same winner, and retains measured launch parameters. Generated output is a
+normal factory input.
+
+## torch.compile
+
+Compile after model construction and before the first measured step:
+
+```python
+model = model.cuda().train()
+model.compile(mode="default", fullgraph=True)
+```
+
+PyTorch modes trade cold-start cost, kernel search, and CUDA Graph memory.
+`default` is the general recommendation. RTX 5090 measurements also found
+`max-autotune-no-cudagraphs` useful for long fixed-shape runs. `reduce-overhead`
+and `max-autotune` may retain additional memory through CUDA Graphs. Warm up the
+compiled graph before timing and report compilation separately.
+
+Compilation changes execution graphs, not weights. Saving the original model's
+state dict remains portable. The checkpoint loader also removes `_orig_mod.`
+when a state dict comes from the wrapper returned by `torch.compile(model)`.
+Compiler artifacts are never part of a checkpoint.

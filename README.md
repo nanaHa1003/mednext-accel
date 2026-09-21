@@ -27,7 +27,7 @@ shape-specific CUDA acceleration.
 | Load MONAI checkpoints | No conversion API | Native format | **Automatic; explicit MONAI-compatible factories for Base/Medium/Large** |
 | Activation checkpointing policy | Whole-block checkpointing in published Medium/Large factories | No model-level policy | **Expansion branch or whole block, selectable per resolution stage** |
 | Model-specific optimized training operators | No | No | **Triton depthwise backward and optional pointwise GEMM** |
-| Hardware/shape-aware backend selection | No | No | **Conservative policy or persistent per-shape autotuning** |
+| Hardware/shape-aware backend selection | No | No | **Bundled per-SM profiles plus a standalone local profiler** |
 | Explicit portable-eval validation | No model export API | No model export API | **`jit.trace`, `torch.export`, and ONNX Runtime tested** |
 
 “No” means that the upstream model API does not provide that facility; it does
@@ -164,39 +164,63 @@ supported mappings, including eager and `torch.compile` wrapper checkpoints.
 
 ## Select acceleration
 
-Optimization is explicit and runs after device transfer, before compilation,
-optimizer construction, or DDP wrapping:
+Factories use `optimization="auto"` by default. Construction loads a bundled
+profile and installs adaptive wrappers without benchmarking, writing cache files,
+or changing parameters and state-dict keys:
 
 ```python
-import torch
-from mednext_accel.optimization import optimize
+from mednext_accel import mednext_base
 
-model = model.cuda()
-report = optimize(
-    model,
-    input_shape=(1, 1, 128, 128, 128),
-    dtype=torch.bfloat16,
-    policy="autotune",
-    compile_mode="default",
-)
-model.compile(mode=report.compile_mode, fullgraph=True)
+model = mednext_base(in_channels=1, out_channels=3)
 ```
 
-Use `fullgraph=True` when the complete training graph is supported. On the RTX
-5090, `mode="default"` is a good general setting, while
-`mode="max-autotune-no-cudagraphs"` has worked well for long runs with a fixed
-input shape and enough steps to amortize compilation.
+Use `optimization="reference"` for standard PyTorch operators only. A profile
+created on the current machine can be supplied as a YAML/JSON path or a
+YAML-compatible mapping:
 
-The `torch` policy uses only native operators. `conservative` applies narrow
-SM 12.0 BF16 configurations measured on the RTX 5090. For
-`128x128x128` inputs, regular depthwise kernels accept any positive batch size;
-batches 1, 2, 4, and 6 have measured dW launch parameters. Batches 2, 4, and 6
-also select measured per-sample pointwise GEMMs to avoid unfavorable batched
-cuDNN backward algorithms. Other batches retain native pointwise convolutions.
-`autotune` benchmarks every unique eligible batch and operator shape on the
-current GPU and caches the result.
-Every unselected shape uses PyTorch. Optional backends preserve parameter
-identity and state-dict paths. See [optimization and compilation](docs/optimization.md).
+```python
+model = mednext_base(
+    in_channels=1,
+    out_channels=3,
+    optimization="~/.cache/mednext_accel/profiles/sm120-local.json",
+)
+```
+
+Bundled exact-SM rules take priority over generic NVIDIA rules. Unknown NVIDIA
+architectures use the generic profile with one warning. A user profile is still
+applied when its recorded SM differs from the current GPU, also with one warning;
+this supports intentional cross-machine experiments without silently blocking
+them. Approximate implementations require explicit opt-in.
+
+Generate one local profile with no workload flags:
+
+```bash
+mednext-accel profile
+```
+
+The profiler detects the GPU and VRAM, expands small batches densely, searches
+for the largest feasible batch with isolated subprocesses, validates candidate
+forward/backward results, and writes one merged profile. A small YAML campaign
+can restrict variants or input shapes. Model construction and first forward never
+run these benchmarks.
+
+Use `fullgraph=True` when the complete training graph is supported. On RTX 5090,
+`mode="default"` is a good general choice, while
+`mode="max-autotune-no-cudagraphs"` can be worthwhile for long fixed-shape runs
+that amortize its larger compile cost.
+
+Inspect decisions without running a full training step:
+
+```python
+report = model.explain_optimization(
+    input_shape=(3, 1, 128, 128, 128),
+    dtype="bfloat16",
+    device="cuda:0",
+)
+```
+
+See [optimization and profiling](docs/optimization.md) and the
+[SM120 evidence](docs/benchmarks/sm120-profile.md).
 
 ## Export evaluation models
 
@@ -214,8 +238,8 @@ Generated output belongs in `artifacts/` and is ignored by Git.
 
 Published RTX 5090 measurements and their limits are retained under
 [`docs/benchmarks/`](docs/benchmarks/). Results are hardware and software
-specific; use the autotuner or collect a matched profile on L40S, RTX A6000,
-RTX 8000, and other architectures.
+specific; run `mednext-accel profile` on L40S, RTX A6000, RTX 8000, and other
+architectures to create a matched profile.
 
 CPU correctness, export, and wheel-install tests run in CI on Python 3.10–3.12.
 CUDA kernel correctness and performance tests require a local NVIDIA GPU; run

@@ -7,7 +7,7 @@ nnU-Net or MONAI data pipelines. It uses:
 
 - official MedNeXt commit `0b78ed869fbd1cc2fd38754d2f8519f1b72d43ba`;
 - MONAI 1.5.2;
-- MedNeXt-Accel commit containing the production conservative policy;
+- MedNeXt-Accel commit containing the production optimized profile;
 - PyTorch 2.12.0+cu132, CUDA 13.2, cuDNN 9.20;
 - NVIDIA GeForce RTX 5090, compute capability 12.0;
 - Base variant, batch one, input `[1, 1, 128, 128, 128]`, three classes;
@@ -83,5 +83,5 @@ application throughput. Data loading, augmentation, distributed communication,
 losses used by a real task, and host-to-device transfer are excluded. MONAI's
 architectural difference makes its timing informative but not an exact
 parameter-for-parameter comparison. Results should be repeated on other GPU
-architectures; the per-shape autotuner exists because the best backend can
+architectures; the standalone profiler exists because the best backend can
 change with hardware and software versions.

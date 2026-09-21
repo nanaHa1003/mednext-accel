@@ -24,6 +24,9 @@ dist/
 
 # Profiling, benchmark, and compiler artifacts
 profile_results/
+profile-campaigns/
+*-local.json
+*.profile.tmp
 *.ncu-rep
 *.nsys-rep
 *.qdrep
