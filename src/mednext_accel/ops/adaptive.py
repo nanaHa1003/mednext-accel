@@ -225,7 +225,10 @@ class AdaptiveDepthwise3d(nn.Module):
             return self._reference(x)
         dx = self.resolver.resolve(self.descriptor, context, "backward_input")
         dw = self.resolver.resolve(self.descriptor, context, "backward_weight")
-        from ._triton import depthwise as backend
+        try:
+            from ._triton import depthwise as backend
+        except (ImportError, AttributeError):
+            return self._reference(x)
 
         weight = self.weight.to(x.dtype)
         bias = self.bias.to(x.dtype) if self.bias is not None else None
