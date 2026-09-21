@@ -88,9 +88,11 @@ def test_profile_reports_the_complete_environment_summary(monkeypatch, tmp_path)
     assert str(tmp_path / "profile.json") in reporter.events[1].message
 
 
-def test_synthesized_profile_embeds_environment_in_provenance() -> None:
+def test_synthesized_profile_embeds_environment_in_provenance(monkeypatch) -> None:
     campaign = load_campaign(None)
     environment = {"gpu": {"name": "NVIDIA L40S", "sm": [8, 9]}}
+    monkeypatch.setattr(api.torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(api.torch.cuda, "get_device_capability", lambda: (8, 9))
     generated = api.synthesize_campaign(campaign, (), environment=environment)
 
     assert generated.provenance["environment"]["gpu"]["name"] == "NVIDIA L40S"
