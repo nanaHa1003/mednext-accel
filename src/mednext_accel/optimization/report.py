@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal
+from types import MappingProxyType
+from typing import Literal, TypeAlias
+
+from .descriptors import ExecutionContext, OperatorDescriptor
+
+JsonValue: TypeAlias = str | int | float | bool | None | tuple["JsonValue", ...]
 
 OptimizationPolicy = Literal["torch", "conservative", "autotune"]
 CompileMode = Literal["default", "reduce-overhead", "max-autotune", "max-autotune-no-cudagraphs"]
@@ -60,3 +66,30 @@ class OptimizationReport:
     cache_hit: bool = False
     cache_key: str | None = None
     notes: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class Decision:
+    """One profile resolution with enough provenance for inspection."""
+
+    descriptor: OperatorDescriptor
+    phase: str
+    implementation: str
+    parameters: Mapping[str, JsonValue]
+    profile: str
+    rule: str
+    confidence: Literal["measured", "interpolated", "extrapolated", "default", "guard"]
+    warning: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "parameters", MappingProxyType(dict(self.parameters)))
+
+
+@dataclass(frozen=True, slots=True)
+class ProfileOptimizationReport:
+    """Profile-driven decisions for every eligible model operator."""
+
+    profile: str
+    context: ExecutionContext
+    decisions: tuple[Decision, ...]
+    warnings: tuple[str, ...] = ()
