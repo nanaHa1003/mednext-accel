@@ -82,6 +82,71 @@ class OptimizationProfile:
     measurements: JsonValue = None
 
 
+def _thaw(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _thaw(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_thaw(item) for item in value]
+    return value
+
+
+def _range_primitive(value: NumericRange) -> dict[str, int | float]:
+    result = {}
+    if value.minimum is not None:
+        result["min"] = value.minimum
+    if value.maximum is not None:
+        result["max"] = value.maximum
+    return result
+
+
+def profile_to_primitive(profile: OptimizationProfile) -> dict[str, object]:
+    """Return canonical JSON-compatible profile data."""
+
+    def selection(value: ProfileSelection) -> dict[str, object]:
+        return {"implementation": value.implementation, "parameters": _thaw(value.parameters)}
+
+    def rule(value: ProfileRule) -> dict[str, object]:
+        match: dict[str, object] = {}
+        for name, item in (("batch", value.batch), ("spatial_volume", value.spatial_volume),
+                           ("total_vram_gib", value.total_vram_gib)):
+            primitive = _range_primitive(item)
+            if primitive:
+                match[name] = primitive
+        for name in (
+            "in_channels", "out_channels", "dtype", "model_family", "variant",
+            "checkpointing",
+        ):
+            item = getattr(value, name)
+            if item is not None:
+                match[name] = item
+        if value.spatial_shape is not None:
+            match["spatial_shape"] = list(value.spatial_shape)
+        result: dict[str, object] = {
+            "id": value.identifier, "family": value.family, "match": match,
+            "phases": {phase: selection(item) for phase, item in value.phases.items()},
+            "confidence": value.confidence,
+        }
+        if value.direction is not None:
+            result["direction"] = value.direction
+        return result
+
+    target: dict[str, object] = {"vendor": profile.vendor, "sm": None}
+    if profile.target_sm is not None:
+        target["sm"] = list(profile.target_sm)
+    return {
+        "schema_version": profile.schema_version,
+        "profile": {"name": profile.name, "target": target,
+                    "provenance": _thaw(profile.provenance)},
+        "defaults": {
+            family: {phase: selection(item) for phase, item in phases.items()}
+            for family, phases in profile.defaults.items()
+        },
+        "rules": [rule(item) for item in profile.rules],
+        "overrides": [rule(item) for item in profile.overrides],
+        "measurements": _thaw(profile.measurements),
+    }
+
+
 def _mapping(value: object, path: str) -> Mapping[str, object]:
     if not isinstance(value, Mapping):
         raise ValueError(f"{path} must be a mapping")

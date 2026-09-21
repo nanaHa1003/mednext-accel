@@ -33,6 +33,9 @@ dev = ["build>=1.2", "pytest>=8", "ruff>=0.8", "twine>=5"]
 Repository = "https://github.com/nanaHa1003/mednext-accel"
 Issues = "https://github.com/nanaHa1003/mednext-accel/issues"
 
+[project.scripts]
+mednext-accel = "mednext_accel.profiling.cli:main"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/mednext_accel"]
 

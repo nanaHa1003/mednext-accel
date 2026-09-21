@@ -6,13 +6,14 @@ from pathlib import Path
 
 import pytest
 
+from mednext_accel.profiling import cli
+
 ROOT = Path(__file__).parents[2]
 
 
 @pytest.mark.parametrize(
     "script",
     [
-        "benchmarks/autotune.py",
         "benchmarks/depthwise.py",
         "benchmarks/implementations.py",
         "benchmarks/pointwise.py",
@@ -44,3 +45,24 @@ def test_kernel_benchmark_accepts_batch_size(script: str) -> None:
     )
 
     assert "--batch-size" in result.stdout
+
+
+@pytest.mark.parametrize("arguments", [["--help"], ["profile", "--help"]])
+def test_package_cli_help_does_not_import_cuda(arguments, capsys) -> None:
+    with pytest.raises(SystemExit) as caught:
+        cli.main(arguments)
+    assert caught.value.code == 0
+    assert "usage:" in capsys.readouterr().out.lower()
+
+
+def test_zero_argument_profile_uses_default_campaign(monkeypatch, capsys) -> None:
+    seen = []
+
+    class Result:
+        output_path = "generated.json"
+        measurements = ()
+
+    monkeypatch.setattr(cli, "profile", lambda source=None: seen.append(source) or Result())
+    assert cli.main(["profile"]) == 0
+    assert seen == [None]
+    assert "generated.json" in capsys.readouterr().out

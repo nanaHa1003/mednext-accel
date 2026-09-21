@@ -27,6 +27,7 @@ class Measurement:
     reference_peak_bytes: int
     candidate_peak_bytes: int
     valid: bool
+    parameters: tuple[tuple[str, int], ...] = ()
 
     def to_primitive(self) -> dict[str, object]:
         return asdict(self)
@@ -75,21 +76,21 @@ def synthesize_profile(
     winners = sorted((item for item in measurements if _wins(item, objective)), key=lambda item: (
         item.family, item.direction, item.phase, item.implementation,
         item.spatial_shape, item.in_channels, item.out_channels, item.dtype,
-        item.checkpointing, item.batch,
+        item.checkpointing, item.parameters, item.batch,
     ))
     groups: list[list[Measurement]] = []
     for item in winners:
         identity = (
             item.family, item.direction, item.phase, item.implementation,
             item.spatial_shape, item.in_channels, item.out_channels, item.dtype,
-            item.checkpointing,
+            item.checkpointing, item.parameters,
         )
         if groups:
             previous = groups[-1][-1]
             previous_identity = (
                 previous.family, previous.direction, previous.phase, previous.implementation,
                 previous.spatial_shape, previous.in_channels, previous.out_channels,
-                previous.dtype, previous.checkpointing,
+                previous.dtype, previous.checkpointing, previous.parameters,
             )
             if identity == previous_identity and item.batch == previous.batch + 1:
                 groups[-1].append(item)
@@ -111,7 +112,10 @@ def synthesize_profile(
                 "checkpointing": first.checkpointing,
             },
             "phases": {
-                first.phase: {"implementation": first.implementation, "parameters": {}}
+                first.phase: {
+                    "implementation": first.implementation,
+                    "parameters": dict(first.parameters),
+                }
             },
             "confidence": "measured" if len(group) == 1 else "interpolated",
         })
