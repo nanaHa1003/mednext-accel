@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "profile": {
+    "name": "sm120",
+    "target": {"vendor": "nvidia", "sm": [12, 0]},
+    "provenance": {"gpu": "NVIDIA GeForce RTX 5090", "status": "bootstrap"}
+  },
+  "defaults": {
+    "pointwise_conv3d": {
+      "training": {"implementation": "reference", "parameters": {}},
+      "inference": {"implementation": "reference", "parameters": {}},
+      "export": {"implementation": "reference", "parameters": {}}
+    },
+    "depthwise_conv3d": {
+      "training": {"implementation": "reference", "parameters": {}},
+      "inference": {"implementation": "reference", "parameters": {}},
+      "export": {"implementation": "reference", "parameters": {}},
+      "backward_input": {"implementation": "reference", "parameters": {}},
+      "backward_weight": {"implementation": "reference", "parameters": {}},
+      "backward_bias": {"implementation": "reference", "parameters": {}}
+    },
+    "depthwise_conv_transpose3d": {
+      "training": {"implementation": "reference", "parameters": {}},
+      "inference": {"implementation": "reference", "parameters": {}},
+      "export": {"implementation": "reference", "parameters": {}},
+      "backward_input": {"implementation": "reference", "parameters": {}},
+      "backward_weight": {"implementation": "reference", "parameters": {}}
+    },
+    "gelu": {
+      "training": {"implementation": "reference", "parameters": {}},
+      "inference": {"implementation": "gelu_tanh", "parameters": {}},
+      "export": {"implementation": "reference", "parameters": {}}
+    }
+  },
+  "rules": [
+    {
+      "id": "pw-highres-b2-b4-32-64", "family": "pointwise_conv3d",
+      "match": {"batch": {"min": 2, "max": 4}, "spatial_volume": {"min": 2097152, "max": 2097152}, "in_channels": 32, "out_channels": 64, "dtype": "bfloat16"},
+      "phases": {"training": {"implementation": "pointwise_gemm_per_sample", "parameters": {}}},
+      "confidence": "interpolated"
+    },
+    {
+      "id": "pw-highres-b2-b4-64-32", "family": "pointwise_conv3d",
+      "match": {"batch": {"min": 2, "max": 4}, "spatial_volume": {"min": 2097152, "max": 2097152}, "in_channels": 64, "out_channels": 32, "dtype": "bfloat16"},
+      "phases": {"training": {"implementation": "pointwise_gemm_per_sample", "parameters": {}}},
+      "confidence": "interpolated"
+    },
+    {
+      "id": "regular-dw", "family": "depthwise_conv3d", "direction": "regular",
+      "match": {"batch": {"min": 1}, "dtype": "bfloat16"},
+      "phases": {
+        "backward_input": {"implementation": "triton_depthwise_dx", "parameters": {"dx_block": 256}},
+        "backward_weight": {"implementation": "triton_split_dw", "parameters": {"dw_block": 256, "dw_splits": {"formula": "scale_work", "anchor_value": 8, "anchor_work": 2097152, "minimum": 4, "maximum": 64, "multiple": 4}}}
+      },
+      "confidence": "extrapolated"
+    },
+    {
+      "id": "transpose-dw", "family": "depthwise_conv_transpose3d", "direction": "transpose",
+      "match": {"batch": {"min": 1}, "dtype": "bfloat16"},
+      "phases": {"backward_weight": {"implementation": "triton_transpose_split_dw", "parameters": {"dw_block": 256, "dw_splits": 8}}},
+      "confidence": "extrapolated"
+    }
+  ],
+  "overrides": []
+}

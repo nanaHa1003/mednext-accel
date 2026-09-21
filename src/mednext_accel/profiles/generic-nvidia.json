@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "profile": {
+    "name": "generic-nvidia",
+    "target": {"vendor": "nvidia", "sm": null},
+    "provenance": {"derived_from": "RTX 5090 SM120", "status": "bootstrap"}
+  },
+  "defaults": {
+    "pointwise_conv3d": {
+      "training": {"implementation": "reference", "parameters": {}},
+      "inference": {"implementation": "reference", "parameters": {}},
+      "export": {"implementation": "reference", "parameters": {}}
+    },
+    "depthwise_conv3d": {
+      "training": {"implementation": "reference", "parameters": {}},
+      "inference": {"implementation": "reference", "parameters": {}},
+      "export": {"implementation": "reference", "parameters": {}},
+      "backward_input": {"implementation": "reference", "parameters": {}},
+      "backward_weight": {"implementation": "reference", "parameters": {}},
+      "backward_bias": {"implementation": "reference", "parameters": {}}
+    },
+    "depthwise_conv_transpose3d": {
+      "training": {"implementation": "reference", "parameters": {}},
+      "inference": {"implementation": "reference", "parameters": {}},
+      "export": {"implementation": "reference", "parameters": {}},
+      "backward_input": {"implementation": "reference", "parameters": {}},
+      "backward_weight": {"implementation": "reference", "parameters": {}}
+    },
+    "gelu": {
+      "training": {"implementation": "reference", "parameters": {}},
+      "inference": {"implementation": "gelu_tanh", "parameters": {}},
+      "export": {"implementation": "reference", "parameters": {}}
+    }
+  },
+  "rules": [],
+  "overrides": []
+}

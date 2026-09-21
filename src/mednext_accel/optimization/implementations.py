@@ -60,7 +60,21 @@ class ImplementationRegistry:
 def default_implementation_registry() -> ImplementationRegistry:
     registry = ImplementationRegistry()
     definitions = (
-        ("reference", ("*",), ("training", "inference", "export"), "exact", True),
+        (
+            "reference",
+            ("*",),
+            (
+                "training",
+                "inference",
+                "export",
+                "forward",
+                "backward_input",
+                "backward_weight",
+                "backward_bias",
+            ),
+            "exact",
+            True,
+        ),
         ("pointwise_gemm_per_sample", ("pointwise_conv3d",), ("training",), "numerical", False),
         ("triton_depthwise_dx", ("depthwise_conv3d",), ("backward_input",), "numerical", False),
         ("triton_split_dw", ("depthwise_conv3d",), ("backward_weight",), "numerical", False),
