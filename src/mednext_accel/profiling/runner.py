@@ -5,12 +5,13 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from dataclasses import asdict
+from dataclasses import asdict, replace
 
+from ..optimization.schema import profile_to_primitive
 from .batch_search import ProbeResult, search_batches
 from .benchmark import run_json_subprocess
 from .campaign import Campaign, Workload
-from .synthesize import Measurement
+from .synthesize import Measurement, synthesize_profile
 
 
 def _checkpoint(value: str):
@@ -52,11 +53,12 @@ def _model_probe(payload: dict[str, object]) -> dict[str, object]:
 
     workload = payload["workload"]
     assert isinstance(workload, dict)
+    optimization = payload.get("optimization", "reference")
     model = _factory(str(workload["variant"]))(
         in_channels=int(workload["in_channels"]),
         out_channels=int(workload["out_channels"]),
         checkpointing=_checkpoint(str(workload["checkpointing"])),
-        optimization="reference",
+        optimization=optimization,
     ).cuda().train()
     compile_mode = str(payload.get("compile_mode", "default"))
     model.compile(mode=compile_mode, fullgraph=True)
@@ -309,13 +311,18 @@ def _depthwise_shapes(
     return tuple(sorted(found))
 
 
-def _batches(campaign: Campaign, workload: Workload, total_vram: int) -> tuple[int, ...]:
+def _batches(
+    campaign: Campaign, workload: Workload, total_vram: int
+) -> tuple[tuple[int, ...], dict[int, dict[str, object]]]:
+    model_results: dict[int, dict[str, object]] = {}
+
     def probe(batch: int) -> ProbeResult:
         payload = {
             "kind": "model", "batch": batch, "workload": asdict(workload),
             "compile_mode": campaign.compile_mode,
         }
         result = _invoke(payload)
+        model_results[batch] = result
         feasible = result.get("status") == "ok"
         return ProbeResult(
             batch, feasible, int(result.get("peak_bytes", total_vram + 1)),
@@ -325,7 +332,28 @@ def _batches(campaign: Campaign, workload: Workload, total_vram: int) -> tuple[i
     result = search_batches(
         campaign.batch_search, total_vram_bytes=total_vram, probe=probe
     )
-    return tuple(item.batch for item in result.probes if item.feasible)
+    return (
+        tuple(item.batch for item in result.probes if item.feasible),
+        model_results,
+    )
+
+
+def _whole_model_accepts(
+    objective: str,
+    reference: dict[str, object],
+    candidate: dict[str, object],
+) -> bool:
+    if candidate.get("status") != "ok":
+        return False
+    reference_ms = float(reference["step_ms"])
+    candidate_ms = float(candidate["step_ms"])
+    reference_peak = int(reference["peak_bytes"])
+    candidate_peak = int(candidate["peak_bytes"])
+    if objective == "memory":
+        return candidate_peak < reference_peak and candidate_ms <= reference_ms * 1.10
+    if objective == "throughput":
+        return candidate_ms < reference_ms and candidate_peak <= reference_peak * 1.25
+    return candidate_ms < reference_ms and candidate_peak <= reference_peak * 1.15
 
 
 def run_campaign(campaign: Campaign) -> tuple[Measurement, ...]:
@@ -340,10 +368,11 @@ def run_campaign(campaign: Campaign) -> tuple[Measurement, ...]:
             f"[{workload_index}/{len(campaign.workloads)}] {workload.variant} "
             f"{workload.spatial} {workload.checkpointing}", file=sys.stderr,
         )
-        batches = _batches(campaign, workload, total_vram)
+        batches, reference_steps = _batches(campaign, workload, total_vram)
         shapes = _pointwise_shapes(workload)
         depthwise_shapes = _depthwise_shapes(workload)
         for batch in batches:
+            batch_measurements: list[Measurement] = []
             for in_channels, out_channels, spatial in shapes:
                 result = _invoke({
                     "kind": "pointwise", "batch": batch,
@@ -352,7 +381,7 @@ def run_campaign(campaign: Campaign) -> tuple[Measurement, ...]:
                 })
                 if result.get("status") != "ok":
                     continue
-                measurements.append(Measurement(
+                batch_measurements.append(Measurement(
                     family="pointwise_conv3d", direction="regular", phase="training",
                     implementation="pointwise_gemm_per_sample", batch=batch,
                     spatial_shape=spatial, in_channels=in_channels,
@@ -386,7 +415,7 @@ def run_campaign(campaign: Campaign) -> tuple[Measurement, ...]:
                         "depthwise_conv_transpose3d"
                         if direction == "transpose" else "depthwise_conv3d"
                     )
-                    measurements.append(Measurement(
+                    batch_measurements.append(Measurement(
                         family=family, direction=direction, phase=phase,
                         implementation=str(result["implementation"]), batch=batch,
                         spatial_shape=spatial, in_channels=channels,
@@ -401,6 +430,30 @@ def run_campaign(campaign: Campaign) -> tuple[Measurement, ...]:
                             (str(name), int(value)) for name, value in result["parameters"]
                         ),
                     ))
+            provisional = synthesize_profile(
+                [*measurements, *batch_measurements],
+                name="campaign-candidate",
+                sm=torch.cuda.get_device_capability(),
+                objective=campaign.objective,
+            )
+            candidate_step = _invoke({
+                "kind": "model", "batch": batch, "workload": asdict(workload),
+                "compile_mode": campaign.compile_mode,
+                "optimization": profile_to_primitive(provisional),
+            })
+            reference_step = reference_steps[batch]
+            accepted = _whole_model_accepts(
+                campaign.objective, reference_step, candidate_step
+            )
+            if not accepted:
+                batch_measurements = [
+                    replace(item, valid=False) for item in batch_measurements
+                ]
+                print(
+                    f"  batch {batch}: isolated winners rejected by whole-model validation",
+                    file=sys.stderr,
+                )
+            measurements.extend(batch_measurements)
     return tuple(measurements)
 
 
