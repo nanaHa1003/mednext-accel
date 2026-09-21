@@ -289,12 +289,13 @@ def install_adaptive_operators(
     *,
     resolver: OptimizationResolver,
     model_context: ModelOptimizationContext,
+    _prefix: str = "",
 ) -> int:
     """Install wrappers in place while retaining every Parameter object."""
 
     count = 0
     for name, child in list(model.named_children()):
-        role = name
+        role = f"{_prefix}.{name}" if _prefix else name
         if _pointwise_eligible(child):
             setattr(model, name, AdaptivePointwise3d(child, resolver, model_context, role=role))
             count += 1
@@ -303,6 +304,9 @@ def install_adaptive_operators(
             count += 1
         else:
             count += install_adaptive_operators(
-                child, resolver=resolver, model_context=model_context
+                child,
+                resolver=resolver,
+                model_context=model_context,
+                _prefix=role,
             )
     return count

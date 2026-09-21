@@ -185,6 +185,12 @@ def test_explain_optimization_reports_batch_three_gemm() -> None:
         decision.implementation == "pointwise_gemm_per_sample"
         for decision in report.decisions
     )
+    assert any(
+        decision.descriptor.in_channels == 32
+        and decision.descriptor.out_channels == 96
+        and decision.implementation == "pointwise_gemm_per_sample"
+        for decision in report.decisions
+    )
 
 
 @pytest.mark.parametrize(

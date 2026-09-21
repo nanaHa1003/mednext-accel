@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from os import PathLike
 from typing import Literal, TypeAlias
 
@@ -255,11 +256,20 @@ class MedNeXtV1(nn.Module):
             return OptimizationReport("reference", context, ())
         decisions = []
         for module in self.modules():
+            module_context = replace(
+                context,
+                spatial_shape=_spatial_shape_for_role(
+                    module.descriptor.role, context.spatial_shape
+                ) if isinstance(module, (AdaptivePointwise3d, AdaptiveDepthwise3d))
+                else context.spatial_shape,
+            )
             if isinstance(module, AdaptivePointwise3d):
-                decisions.append(resolver.resolve(module.descriptor, context, context.phase))
+                decisions.append(
+                    resolver.resolve(module.descriptor, module_context, context.phase)
+                )
             elif isinstance(module, AdaptiveDepthwise3d):
                 decisions.extend(
-                    resolver.resolve(module.descriptor, context, phase)
+                    resolver.resolve(module.descriptor, module_context, phase)
                     for phase in ("backward_input", "backward_weight")
                 )
         report_warnings = tuple(
@@ -282,6 +292,31 @@ def _checkpoint_name(config: CheckpointConfig | None) -> str:
         return "all-expansion" if config.style == "expansion" else "whole-block"
     stages = ",".join(map(str, config.stages))
     return f"{config.style}:{stages}"
+
+
+def _spatial_shape_for_role(
+    role: str | None, input_spatial: tuple[int, int, int]
+) -> tuple[int, int, int]:
+    if role is None or role == "stem" or role.startswith("head"):
+        return input_spatial
+    parts = role.split(".")
+    reductions = 0
+    if parts[0] == "encoder_stages":
+        reductions = int(parts[1])
+    elif parts[0] == "downsamples":
+        reductions = int(parts[1]) + (0 if parts[-1] == "depthwise" else 1)
+    elif parts[0] == "bottleneck":
+        reductions = 4
+    elif parts[0] == "upsamples":
+        reductions = 4 - int(parts[1])
+    elif parts[0] == "decoder_stages":
+        reductions = 3 - int(parts[1])
+    spatial = input_spatial
+    for _ in range(reductions):
+        spatial = tuple((size + 1) // 2 for size in spatial)
+    if parts[0] == "upsamples" and parts[-1] != "depthwise":
+        spatial = tuple(2 * size - 1 for size in spatial)
+    return spatial
 
 
 def _factory(
