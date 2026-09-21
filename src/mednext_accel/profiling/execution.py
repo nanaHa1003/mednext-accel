@@ -14,6 +14,7 @@ from .matrix import (
     deduplicate_cases,
     group_cases,
 )
+from .progress import ProgressEvent, ProgressReporter
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,12 +73,40 @@ def build_execution_plan(
     *,
     discover: Callable[[Workload], WorkloadShapes],
     search: Callable[[Workload], BatchSearchResult],
+    progress: ProgressReporter | None = None,
 ) -> ExecutionPlan:
     """Discover, search, and globally deduplicate a campaign's kernel cases."""
 
     validate_campaign_dtypes(campaign)
     workloads = deduplicate_workloads(campaign.workloads)
     discovered = tuple((workload, discover(workload)) for workload in workloads)
+    if progress is not None:
+        static_cases, _ = deduplicate_cases(
+            tuple(
+                build_workload_cases(
+                    workload,
+                    (1,),
+                    pointwise_shapes=shapes.pointwise,
+                    depthwise_shapes=shapes.depthwise,
+                )
+                for workload, shapes in discovered
+            )
+        )
+        pointwise_count = sum(case.key.family == "pointwise_conv3d" for case in static_cases)
+        categories = tuple(group.category for group in group_cases(static_cases))
+        progress.emit(
+            ProgressEvent(
+                "status",
+                "static-plan",
+                message=(
+                    f"static shape plan: {len(workloads)} workloads, "
+                    f"{pointwise_count} unique pointwise shapes, "
+                    f"{len(static_cases) - pointwise_count} unique depthwise phase/shape pairs, "
+                    f"{len(categories)} possible kernel groups per feasible batch "
+                    f"({', '.join(categories) or 'none'})"
+                ),
+            )
+        )
     searched = tuple((workload, shapes, search(workload)) for workload, shapes in discovered)
     workload_cases = tuple(
         build_workload_cases(

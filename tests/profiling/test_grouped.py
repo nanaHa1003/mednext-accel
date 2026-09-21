@@ -71,6 +71,15 @@ def test_failed_group_bisects_until_the_bad_case_is_isolated() -> None:
     assert sum(item[1] for item in attempt_events if item[0] == "scheduled") == 4
     assert sum(item[1] for item in attempt_events if item[0] == "completed") == 5
     assert sum(item[2] for item in attempt_events if item[0] == "completed") == 3
+    assert attempt_events == [
+        ("scheduled", 2, 0),
+        ("completed", 1, 0),
+        ("completed", 1, 1),
+        ("scheduled", 2, 0),
+        ("completed", 1, 0),
+        ("completed", 1, 1),
+        ("completed", 1, 1),
+    ]
 
 
 @pytest.mark.parametrize("malformation", ["missing", "extra", "duplicate"])

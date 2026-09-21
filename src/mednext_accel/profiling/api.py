@@ -16,6 +16,7 @@ import torch
 from ..optimization.schema import OptimizationProfile, profile_to_primitive
 from .campaign import Campaign, CampaignSource, load_campaign
 from .environment import collect_environment
+from .execution import validate_campaign_dtypes
 from .progress import ProgressEvent, ProgressReporter
 from .synthesize import Measurement, synthesize_profile
 
@@ -103,6 +104,7 @@ def profile(
     progress: ProgressReporter | None = None,
 ) -> ProfilingResult:
     campaign = load_campaign(source)
+    validate_campaign_dtypes(campaign)
     environment = collect_environment()
     gpu = environment["gpu"]
     software = environment["software"]

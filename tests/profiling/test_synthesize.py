@@ -1,3 +1,7 @@
+from dataclasses import replace
+
+import pytest
+
 from mednext_accel.profiling.synthesize import Measurement, candidate_wins, synthesize_profile
 
 
@@ -52,6 +56,48 @@ def test_invalid_candidate_and_memory_objective_choose_safely() -> None:
 def test_reported_winner_uses_the_same_balanced_threshold_as_synthesis() -> None:
     assert not candidate_wins(measured(2, 100.0, 99.0), "balanced")
     assert candidate_wins(measured(2, 100.0, 96.0), "balanced")
+
+
+@pytest.mark.parametrize(
+    "selection",
+    [{}, {"implementation": "reference"}, {"parameters": (("tile", 32),)}],
+)
+def test_invalid_rule_match_blocks_other_selections_for_the_same_match(selection) -> None:
+    candidate = measured(2, 4.0, 1.0)
+    rejected = replace(candidate, valid=False, **selection)
+
+    profile = synthesize_profile(
+        [candidate, rejected], name="test", sm=(12, 0), objective="balanced"
+    )
+
+    assert profile.rules == ()
+    assert all(not item["valid"] for item in profile.measurements)
+
+
+@pytest.mark.parametrize(
+    "different_match",
+    [
+        {"family": "depthwise_conv3d"},
+        {"direction": "downsample"},
+        {"phase": "inference"},
+        {"batch": 3},
+        {"spatial_shape": (64, 64, 64)},
+        {"in_channels": 16},
+        {"out_channels": 128},
+        {"dtype": "float32"},
+        {"checkpointing": "none"},
+    ],
+)
+def test_invalid_rule_match_preserves_distinguishable_candidate(different_match) -> None:
+    candidate = measured(2, 4.0, 1.0)
+    rejected = replace(candidate, valid=False, **different_match)
+
+    profile = synthesize_profile(
+        [candidate, rejected], name="test", sm=(12, 0), objective="balanced"
+    )
+
+    assert len(profile.rules) == 1
+    assert profile.measurements[0]["valid"] is True
 
 
 def test_synthesize_profile_records_deduplicated_execution_counts() -> None:

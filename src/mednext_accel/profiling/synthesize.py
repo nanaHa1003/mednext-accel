@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from dataclasses import asdict, dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import asdict, dataclass, replace
 from typing import Literal
 
 from ..optimization.schema import OptimizationProfile, parse_profile
@@ -85,6 +85,34 @@ def candidate_wins(item: Measurement, objective: Objective) -> bool:
     )
 
 
+def reconcile_measurements(measurements: Sequence[Measurement]) -> tuple[Measurement, ...]:
+    """Invalidate candidates that schema-v1 rules cannot distinguish from a rejection.
+
+    The identity includes exactly the emitted match fields plus family, direction,
+    and phase. Implementation and launch parameters select a candidate; they do not
+    constrain which workload matches it.
+    """
+
+    def identity(item: Measurement) -> tuple[object, ...]:
+        return (
+            item.family,
+            item.direction,
+            item.phase,
+            item.batch,
+            item.spatial_shape,
+            item.in_channels,
+            item.out_channels,
+            item.dtype,
+            item.checkpointing,
+        )
+
+    rejected = {identity(item) for item in measurements if not item.valid}
+    return tuple(
+        replace(item, valid=False) if item.valid and identity(item) in rejected else item
+        for item in measurements
+    )
+
+
 def _defaults() -> dict[str, dict[str, dict[str, object]]]:
     phases = (
         "training",
@@ -116,6 +144,7 @@ def synthesize_profile(
     compile_mode: str | None = None,
     execution: Mapping[str, int] | None = None,
 ) -> OptimizationProfile:
+    measurements = reconcile_measurements(measurements)
     winners = sorted(
         (item for item in measurements if candidate_wins(item, objective)),
         key=lambda item: (

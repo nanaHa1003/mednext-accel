@@ -20,8 +20,14 @@ from .execution import (
     validate_campaign_dtypes,
 )
 from .grouped import run_group_with_bisection
+from .matrix import depthwise_parameters
 from .progress import ProgressEvent, ProgressReporter
-from .synthesize import Measurement, measurement_from_result, synthesize_profile
+from .synthesize import (
+    Measurement,
+    measurement_from_result,
+    reconcile_measurements,
+    synthesize_profile,
+)
 from .validation import (
     apply_validation_results,
     decision_signature,
@@ -162,6 +168,12 @@ def _depthwise_probe(payload: dict[str, object]) -> dict[str, object]:
     spatial = tuple(int(item) for item in payload["spatial_shape"])
     direction = str(payload["direction"])
     phase = str(payload["phase"])
+    parameters = (
+        tuple((name, int(value)) for name, value in payload["parameters"])
+        if "parameters" in payload
+        else depthwise_parameters(direction, phase, batch, spatial)
+    )
+    launch = dict(parameters)
     stride = 2 if direction in ("downsample", "transpose") else 1
     x = torch.randn(batch, channels, *spatial, device="cuda", dtype=torch.bfloat16)
     weight = torch.randn(channels, 1, kernel, kernel, kernel, device="cuda", dtype=torch.bfloat16)
@@ -189,15 +201,16 @@ def _depthwise_probe(payload: dict[str, object]) -> dict[str, object]:
                 [False, True, False],
             )[1]
 
-        splits = max(1, min(512, round(64 * batch * spatial[0] ** 3 / 64**3)))
-
         def candidate():
             return backend.depthwise_transpose_weight_grad(
-                x, gradient, splits=splits, block=512, kernel_size=kernel
+                x,
+                gradient,
+                splits=launch["dw_splits"],
+                block=launch["dw_block"],
+                kernel_size=kernel,
             )
 
         implementation = "triton_transpose_split_dw"
-        parameters = (("dw_splits", splits), ("dw_block", 512))
     elif direction == "downsample" and phase == "backward_input":
 
         def native():
@@ -216,10 +229,11 @@ def _depthwise_probe(payload: dict[str, object]) -> dict[str, object]:
             )[0]
 
         def candidate():
-            return backend.depthwise_stride2_input_grad(gradient, weight, spatial, block=128)
+            return backend.depthwise_stride2_input_grad(
+                gradient, weight, spatial, block=launch["dx_block"]
+            )
 
         implementation = "triton_downsample_dx"
-        parameters = (("dx_block", 128),)
     elif direction == "regular" and phase == "backward_input":
 
         def native():
@@ -238,10 +252,9 @@ def _depthwise_probe(payload: dict[str, object]) -> dict[str, object]:
             )[0]
 
         def candidate():
-            return backend.depthwise_input_grad(gradient, weight, block=128)
+            return backend.depthwise_input_grad(gradient, weight, block=launch["dx_block"])
 
         implementation = "triton_depthwise_dx"
-        parameters = (("dx_block", 128),)
     elif direction == "regular" and phase == "backward_weight":
 
         def native():
@@ -259,15 +272,16 @@ def _depthwise_probe(payload: dict[str, object]) -> dict[str, object]:
                 [False, True, False],
             )[1]
 
-        splits = max(1, min(512, round(64 * batch * spatial[0] ** 3 / 128**3)))
-
         def candidate():
             return backend.depthwise_weight_grad(
-                x, gradient, splits=splits, block=512, kernel_size=kernel
+                x,
+                gradient,
+                splits=launch["dw_splits"],
+                block=launch["dw_block"],
+                kernel_size=kernel,
             )
 
         implementation = "triton_split_dw"
-        parameters = (("dw_splits", splits), ("dw_block", 512))
     else:
         raise ValueError(f"unsupported depthwise probe {direction}/{phase}")
 
@@ -333,8 +347,9 @@ def _child(payload: dict[str, object]) -> dict[str, object]:
 
 def _invoke(payload: dict[str, object], *, timeout: float = 900) -> dict[str, object]:
     result = run_json_subprocess(
-        [sys.executable, "-m", "mednext_accel.profiling.runner", "--child", json.dumps(payload)],
+        [sys.executable, "-m", "mednext_accel.profiling.runner", "--child"],
         timeout=timeout,
+        input=json.dumps(payload),
     )
     if result.status != "ok":
         return {"status": result.status, "message": result.message}
@@ -555,7 +570,9 @@ def execute_campaign(campaign: Campaign, progress: ProgressReporter | None = Non
         batches, reference_steps = _batches(campaign, workload, total_vram, progress=progress)
         return BatchSearchResult(batches, reference_steps)
 
-    plan = build_execution_plan(campaign, discover=discover_workload_shapes, search=search)
+    plan = build_execution_plan(
+        campaign, discover=discover_workload_shapes, search=search, progress=progress
+    )
     raw_results: dict[str, dict[str, object]] = {}
     group_attempts = 0
     group_total = len(plan.kernel_groups)
@@ -676,7 +693,7 @@ def execute_campaign(campaign: Campaign, progress: ProgressReporter | None = Non
         measurements.extend(apply_validation_results(context_measurements, segments, accepted))
 
     return CampaignRun(
-        measurements=tuple(measurements),
+        measurements=reconcile_measurements(measurements),
         statistics=ExecutionStatistics(
             requested_case_count=plan.requested_case_count,
             kernel_case_count=len(plan.kernel_cases),
@@ -697,10 +714,11 @@ def main(argv: list[str] | None = None) -> int:
     import torch
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--child")
+    parser.add_argument("--child", nargs="?", const="-")
     arguments = parser.parse_args(argv)
     try:
-        result = _child(json.loads(arguments.child))
+        payload = sys.stdin.read() if arguments.child == "-" else arguments.child
+        result = _child(json.loads(payload))
     except torch.cuda.OutOfMemoryError:  # type: ignore[name-defined]
         result = {"status": "oom", "message": "CUDA out of memory"}
     except Exception as error:

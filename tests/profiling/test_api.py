@@ -1,7 +1,9 @@
 import json
 
+import pytest
+
 from mednext_accel.optimization.schema import OptimizationProfile
-from mednext_accel.profiling import api
+from mednext_accel.profiling import api, cli, runner
 from mednext_accel.profiling.campaign import load_campaign
 from mednext_accel.profiling.runner import CampaignRun, ExecutionStatistics
 from mednext_accel.profiling.synthesize import Measurement, synthesize_profile
@@ -169,3 +171,29 @@ def test_public_run_campaign_remains_tuple_compatible(monkeypatch) -> None:
 
     assert measurements == campaign_run.measurements
     assert isinstance(measurements, tuple)
+
+
+@pytest.mark.parametrize("entrypoint", ["api", "cli"])
+@pytest.mark.parametrize("dtypes", [["float32"], ["bfloat16", "float32"]])
+def test_public_profile_rejects_dtypes_before_any_profiling_side_effect(
+    monkeypatch, tmp_path, entrypoint, dtypes
+) -> None:
+    source = {"workloads": [{"variant": "base", "dtypes": dtypes}]}
+    campaign_path = tmp_path / "campaign.yaml"
+    campaign_path.write_text(json.dumps(source))
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("profiling side effect before dtype validation")
+
+    monkeypatch.setattr(api, "collect_environment", forbidden)
+    monkeypatch.setattr(api, "default_profile_path", forbidden)
+    monkeypatch.setattr(api, "execute_campaign", forbidden)
+    monkeypatch.setattr(api.torch.cuda, "is_available", forbidden)
+    monkeypatch.setattr(runner, "discover_workload_shapes", forbidden)
+    monkeypatch.setattr(runner, "_invoke", forbidden)
+
+    with pytest.raises(ValueError, match=r"unsupported.*dtype.*float32"):
+        if entrypoint == "api":
+            api.profile(source)
+        else:
+            cli.main(["profile", str(campaign_path), "--progress", "quiet"])

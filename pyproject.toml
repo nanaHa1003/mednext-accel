@@ -36,6 +36,9 @@ Issues = "https://github.com/nanaHa1003/mednext-accel/issues"
 [project.scripts]
 mednext-accel = "mednext_accel.profiling.cli:main"
 
+[tool.hatch.build]
+exclude = ["/.superpowers"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/mednext_accel"]
 

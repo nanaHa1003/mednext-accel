@@ -40,9 +40,7 @@ def run_group_with_bisection(
 ) -> dict[str, dict[str, object]]:
     """Run a group, bisecting infrastructure failures down to singleton cases."""
 
-    def execute(current: KernelGroup, *, already_scheduled: bool) -> dict[str, dict[str, object]]:
-        if on_attempt is not None and not already_scheduled:
-            on_attempt("scheduled", 1, 0)
+    def execute(current: KernelGroup) -> dict[str, dict[str, object]]:
         result = invoke(
             {"kind": "kernel_group", "cases": [case_payload(case) for case in current.cases]}
         )
@@ -53,6 +51,8 @@ def run_group_with_bisection(
             }
         terminal = result.get("status") == "ok" or len(current.cases) == 1
         if on_attempt is not None:
+            if not terminal:
+                on_attempt("scheduled", 2, 0)
             on_attempt("completed", 1, len(current.cases) if terminal else 0)
         if result.get("status") == "ok":
             items = result["results"]
@@ -64,6 +64,6 @@ def run_group_with_bisection(
         midpoint = len(current.cases) // 2
         left = replace(current, cases=current.cases[:midpoint])
         right = replace(current, cases=current.cases[midpoint:])
-        return execute(left, already_scheduled=False) | execute(right, already_scheduled=False)
+        return execute(left) | execute(right)
 
-    return execute(group, already_scheduled=True)
+    return execute(group)

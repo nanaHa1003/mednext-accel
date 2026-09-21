@@ -3,6 +3,8 @@ from dataclasses import replace
 
 import pytest
 
+from mednext_accel.optimization.descriptors import ExecutionContext, OperatorDescriptor
+from mednext_accel.optimization.resolver import OptimizationResolver
 from mednext_accel.profiling import runner
 from mednext_accel.profiling.batch_search import BatchSearch
 from mednext_accel.profiling.campaign import Campaign, Workload
@@ -10,6 +12,7 @@ from mednext_accel.profiling.execution import WorkloadShapes
 from mednext_accel.profiling.grouped import case_payload, run_group_with_bisection
 from mednext_accel.profiling.matrix import KernelCase, KernelCaseKey
 from mednext_accel.profiling.progress import ProgressEvent
+from mednext_accel.profiling.synthesize import synthesize_profile
 
 
 class _Cuda:
@@ -398,7 +401,14 @@ def test_segment_changes_and_sampling_gaps_each_get_their_own_boundaries(monkeyp
 def test_variants_validate_independently_against_their_own_reference(monkeypatch):
     _prepare_campaign(monkeypatch, batches=(1, 2, 3))
     base = _campaign_contexts().workloads[0]
-    campaign = replace(_campaign_contexts(), workloads=(base, replace(base, variant="large")))
+    campaign = replace(
+        _campaign_contexts(),
+        workloads=(
+            base,
+            replace(base, variant="large"),
+            replace(base, checkpointing="all-expansion"),
+        ),
+    )
     validations = []
     monkeypatch.setattr(
         runner,
@@ -419,7 +429,13 @@ def test_variants_validate_independently_against_their_own_reference(monkeypatch
     def invoke(payload):
         if payload["kind"] != "model":
             return _successful_group(payload)
-        validations.append((payload["workload"]["variant"], payload["batch"]))
+        validations.append(
+            (
+                payload["workload"]["variant"],
+                payload["workload"]["checkpointing"],
+                payload["batch"],
+            )
+        )
         assert all(m["valid"] for m in payload["optimization"]["measurements"])
         assert len(payload["optimization"]["measurements"]) == 3
         return {"status": "ok", "step_ms": 8.0, "peak_bytes": 100}
@@ -427,10 +443,42 @@ def test_variants_validate_independently_against_their_own_reference(monkeypatch
     monkeypatch.setattr(runner, "_invoke", invoke)
     run = runner.execute_campaign(campaign)
 
-    assert validations == [("base", 1), ("base", 3), ("large", 1), ("large", 3)]
-    assert [m.valid for m in run.measurements] == [True, True, True, False, False, False]
+    assert validations == [
+        ("base", "none", 1),
+        ("base", "none", 3),
+        ("large", "none", 1),
+        ("large", "none", 3),
+        ("base", "all-expansion", 1),
+        ("base", "all-expansion", 3),
+    ]
     assert run.statistics.kernel_case_count == 3
-    assert run.statistics.requested_case_count == 6
+    assert run.statistics.requested_case_count == 9
+
+    profile = synthesize_profile(run.measurements, name="final", sm=(8, 9), objective="balanced")
+    resolver = OptimizationResolver([profile])
+    descriptor = OperatorDescriptor(
+        "pointwise_conv3d", "regular", 32, 64, (1, 1, 1), (1, 1, 1), (0, 0, 0), (1, 1, 1), 1
+    )
+    for batch in (1, 2, 3):
+        for variant in ("base", "large"):
+            for checkpointing in ("none", "all-expansion"):
+                context = ExecutionContext(
+                    "training",
+                    "cuda",
+                    (8, 9),
+                    48 * 1024**3,
+                    "bfloat16",
+                    batch,
+                    (128, 128, 128),
+                    "mednext-v1",
+                    variant,
+                    checkpointing,
+                )
+                decision = resolver.resolve(descriptor, context, "training")
+                assert decision.implementation == (
+                    "reference" if checkpointing == "none" else "pointwise_gemm_per_sample"
+                )
+    assert [m.valid for m in run.measurements] == [False] * 6 + [True] * 3
 
 
 def test_statistics_count_physical_bisection_attempts_and_keep_failed_evidence(monkeypatch):
@@ -477,9 +525,8 @@ def test_statistics_count_physical_bisection_attempts_and_keep_failed_evidence(m
         (event.completed, event.total, event.secondary_completed, event.secondary_total)
         for event in group_advances
     ] == [
-        (1, 1, 0, 2),
-        (1, 2, 0, 2),
-        (2, 2, 1, 2),
+        (0, 3, 0, 2),
+        (1, 3, 0, 2),
         (2, 3, 1, 2),
         (3, 3, 2, 2),
     ]
@@ -496,6 +543,64 @@ def test_no_feasible_batches_launch_no_kernel_or_validation_children(monkeypatch
     assert run.statistics.kernel_case_count == 0
     assert run.statistics.kernel_group_count == 0
     assert run.statistics.whole_model_validation_count == 0
+
+
+def test_static_shape_plan_is_emitted_after_discovery_before_adaptive_search(monkeypatch, capsys):
+    _prepare_campaign(monkeypatch, batches=())
+    timeline = []
+
+    class Recorder(_Recorder):
+        def emit(self, event):
+            super().emit(event)
+            if event.stage == "static-plan":
+                timeline.append("static-plan")
+
+    reporter = Recorder()
+
+    def discover(workload):
+        timeline.append("discover")
+        return WorkloadShapes(
+            (
+                (32, 64, (128, 128, 128)),
+                (32, 128 if workload.checkpointing == "none" else 256, (128, 128, 128)),
+            ),
+            (
+                ("regular", 32, 3, (128, 128, 128)),
+                ("regular", 64, 3, (64, 64, 64)),
+                ("downsample", 64, 3, (64, 64, 64)),
+                ("transpose", 128, 3, (32, 32, 32)),
+            ),
+        )
+
+    def search(*args, **kwargs):
+        timeline.append("search")
+        return (), {}
+
+    monkeypatch.setattr(runner, "discover_workload_shapes", discover)
+    monkeypatch.setattr(runner, "_batches", search)
+
+    runner.execute_campaign(_campaign_contexts(), progress=reporter)
+
+    assert timeline == ["discover", "discover", "static-plan", "search", "search"]
+    static = [event for event in reporter.events if event.stage == "static-plan"]
+    assert len(static) == 1
+    event = static[0]
+    assert event.kind == "status" and event.total is None and event.completed is None
+    for fact in (
+        "static shape plan",
+        "2 workloads",
+        "3 unique pointwise shapes",
+        "6 unique depthwise phase/shape pairs",
+        "5 possible kernel groups per feasible batch",
+        "pointwise",
+        "regular-dx",
+        "regular-dw",
+        "downsample-dx",
+        "transpose-dw",
+    ):
+        assert fact in event.message
+    captured = capsys.readouterr()
+    assert captured.out == captured.err == ""
 
 
 @pytest.mark.parametrize("dtypes", [("float32",), ("bfloat16", "float32")])

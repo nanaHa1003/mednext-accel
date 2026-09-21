@@ -17,12 +17,19 @@ class SubprocessResult:
     message: str = ""
 
 
-def run_json_subprocess(command: Sequence[str], *, timeout: float) -> SubprocessResult:
+def run_json_subprocess(
+    command: Sequence[str], *, timeout: float, input: str | None = None
+) -> SubprocessResult:
     """Run one isolated probe and decode its final JSON output line."""
 
     try:
         completed = subprocess.run(
-            tuple(command), capture_output=True, text=True, timeout=timeout, check=False
+            tuple(command),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+            input=input,
         )
     except subprocess.TimeoutExpired:
         return SubprocessResult("timeout", {}, f"probe exceeded {timeout:g} seconds")

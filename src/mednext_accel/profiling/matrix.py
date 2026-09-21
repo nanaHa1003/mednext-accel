@@ -41,12 +41,17 @@ class KernelGroup:
     cases: tuple[KernelCase, ...]
 
 
-def _regular_weight_splits(batch: int, spatial: tuple[int, int, int]) -> int:
-    return max(1, min(512, round(64 * batch * spatial[0] ** 3 / 128**3)))
-
-
-def _transpose_weight_splits(batch: int, spatial: tuple[int, int, int]) -> int:
-    return max(1, min(512, round(64 * batch * spatial[0] ** 3 / 64**3)))
+def depthwise_parameters(
+    direction: str, phase: str, batch: int, spatial: tuple[int, int, int]
+) -> tuple[tuple[str, int], ...]:
+    """Default launch parameters for planning and legacy single-case requests."""
+    if direction in ("regular", "downsample") and phase == "backward_input":
+        return (("dx_block", 128),)
+    if direction in ("regular", "transpose") and phase == "backward_weight":
+        anchor = 128 if direction == "regular" else 64
+        splits = max(1, min(512, round(64 * batch * spatial[0] ** 3 / anchor**3)))
+        return (("dw_splits", splits), ("dw_block", 512))
+    raise ValueError(f"unsupported depthwise probe {direction}/{phase}")
 
 
 def _case(
@@ -125,7 +130,9 @@ def build_workload_cases(
                             kernel_size=kernel_size,
                             dtype=dtype,
                             implementation="triton_depthwise_dx",
-                            parameters=(("dx_block", 128),),
+                            parameters=depthwise_parameters(
+                                direction, "backward_input", batch, spatial
+                            ),
                         )
                     )
                     cases.append(
@@ -140,9 +147,8 @@ def build_workload_cases(
                             kernel_size=kernel_size,
                             dtype=dtype,
                             implementation="triton_split_dw",
-                            parameters=(
-                                ("dw_splits", _regular_weight_splits(batch, spatial)),
-                                ("dw_block", 512),
+                            parameters=depthwise_parameters(
+                                direction, "backward_weight", batch, spatial
                             ),
                         )
                     )
@@ -159,7 +165,9 @@ def build_workload_cases(
                             kernel_size=kernel_size,
                             dtype=dtype,
                             implementation="triton_downsample_dx",
-                            parameters=(("dx_block", 128),),
+                            parameters=depthwise_parameters(
+                                direction, "backward_input", batch, spatial
+                            ),
                         )
                     )
                 elif direction == "transpose":
@@ -175,9 +183,8 @@ def build_workload_cases(
                             kernel_size=kernel_size,
                             dtype=dtype,
                             implementation="triton_transpose_split_dw",
-                            parameters=(
-                                ("dw_splits", _transpose_weight_splits(batch, spatial)),
-                                ("dw_block", 512),
+                            parameters=depthwise_parameters(
+                                direction, "backward_weight", batch, spatial
                             ),
                         )
                     )
