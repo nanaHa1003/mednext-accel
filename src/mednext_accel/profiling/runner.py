@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import sys
 from dataclasses import asdict, replace
@@ -272,6 +273,34 @@ def _depthwise_probe(payload: dict[str, object]) -> dict[str, object]:
     }
 
 
+def _kernel_group_probe(payload: dict[str, object]) -> dict[str, object]:
+    import torch
+
+    cases = payload["cases"]
+    assert isinstance(cases, list)
+    results: list[dict[str, object]] = []
+    for case in cases:
+        assert isinstance(case, dict)
+        case_id = str(case["case_id"])
+        try:
+            family = str(case["family"])
+            if family == "pointwise_conv3d":
+                result = _pointwise_probe(case)
+            elif family in ("depthwise_conv3d", "depthwise_conv_transpose3d"):
+                result = _depthwise_probe(case)
+            else:
+                raise ValueError(f"unknown kernel family {family!r}")
+        except torch.cuda.OutOfMemoryError:
+            result = {"status": "oom", "message": "CUDA out of memory"}
+        except Exception as error:
+            result = {"status": "error", "message": f"{type(error).__name__}: {error}"}
+        finally:
+            gc.collect()
+            torch.cuda.empty_cache()
+        results.append({**result, "case_id": case_id})
+    return {"status": "ok", "results": results}
+
+
 def _child(payload: dict[str, object]) -> dict[str, object]:
     import torch
 
@@ -283,6 +312,8 @@ def _child(payload: dict[str, object]) -> dict[str, object]:
         return _pointwise_probe(payload)
     if payload["kind"] == "depthwise":
         return _depthwise_probe(payload)
+    if payload["kind"] == "kernel_group":
+        return _kernel_group_probe(payload)
     raise ValueError(f"unknown probe kind {payload['kind']!r}")
 
 
