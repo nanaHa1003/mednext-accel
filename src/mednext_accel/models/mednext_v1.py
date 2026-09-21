@@ -278,7 +278,9 @@ class MedNeXtV1(nn.Module):
 def _checkpoint_name(config: CheckpointConfig | None) -> str:
     if config is None:
         return "none"
-    stages = "all" if config.stages is None else ",".join(map(str, config.stages))
+    if config.stages is None:
+        return "all-expansion" if config.style == "expansion" else "whole-block"
+    stages = ",".join(map(str, config.stages))
     return f"{config.style}:{stages}"
 
 

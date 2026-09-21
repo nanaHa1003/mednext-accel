@@ -185,3 +185,22 @@ def test_explain_optimization_reports_batch_three_gemm() -> None:
         decision.implementation == "pointwise_gemm_per_sample"
         for decision in report.decisions
     )
+
+
+@pytest.mark.parametrize(
+    "config, expected",
+    [
+        (None, "none"),
+        (CheckpointConfig(), "all-expansion"),
+        (CheckpointConfig(style="block"), "whole-block"),
+        (CheckpointConfig(stages=(0, 1)), "expansion:0,1"),
+    ],
+)
+def test_optimization_report_uses_campaign_checkpoint_names(config, expected) -> None:
+    model = mednext_small(
+        in_channels=1, out_channels=2, base_channels=2, checkpointing=config
+    )
+    report = model.explain_optimization(
+        input_shape=(1, 1, 32, 32, 32), dtype="bfloat16", device="cpu"
+    )
+    assert report.context.checkpointing == expected
