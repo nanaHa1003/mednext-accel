@@ -33,6 +33,8 @@ _BLACKWELL_BATCHED_POINTWISE_COMMON = (
 )
 _BLACKWELL_BATCHED_POINTWISE_EXTRA = {
     2: (
+        (32, 64, 128, 128, 128),
+        (64, 32, 128, 128, 128),
         (64, 192, 64, 64, 64),
         (128, 32, 127, 127, 127),
         (128, 64, 32, 32, 32),
