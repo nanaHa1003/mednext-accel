@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from collections.abc import Mapping
+from os import PathLike
+from typing import Literal, TypeAlias
 
 import torch
 from torch import Tensor, nn
@@ -10,10 +12,22 @@ from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint
 
 from ..checkpointing import CheckpointConfig
+from ..ops.adaptive import (
+    AdaptiveDepthwise3d,
+    AdaptivePointwise3d,
+    ModelOptimizationContext,
+    execution_context_for_shape,
+    install_adaptive_operators,
+)
+from ..optimization.profiles import ProfileRegistry
+from ..optimization.report import OptimizationReport
 from .blocks import MedNeXtBlock, MedNeXtDownBlock, MedNeXtUpBlock, OutputHead
 from .config import MedNeXtV1Config, get_mednext_v1_config
 
 DeepSupervisionOutput = Literal["tuple", "list", "stacked"]
+OptimizationSource: TypeAlias = (
+    Literal["auto", "reference"] | str | PathLike[str] | Mapping[str, object]
+)
 
 
 class MedNeXtV1(nn.Module):
@@ -34,6 +48,7 @@ class MedNeXtV1(nn.Module):
         self.checkpointing = checkpointing
         self.deep_supervision_output = deep_supervision_output
         self.approximate_gelu_eval = approximate_gelu_eval
+        self.optimization_source: OptimizationSource = "reference"
 
         conv = nn.Conv2d if config.spatial_dims == 2 else nn.Conv3d
         self.stem = conv(config.in_channels, config.base_channels, kernel_size=1)
@@ -204,6 +219,68 @@ class MedNeXtV1(nn.Module):
         ]
         return torch.stack(resized, dim=1)
 
+    def explain_optimization(
+        self,
+        *,
+        input_shape: tuple[int, int, int, int, int],
+        dtype: str | torch.dtype,
+        device: str | torch.device,
+    ) -> OptimizationReport:
+        """Resolve and report implementations without executing the model."""
+
+        resolver = self.__dict__.get("_optimization_resolver")
+        model_context = ModelOptimizationContext(
+            "mednext_v1",
+            self.config.variant,
+            _checkpoint_name(self.checkpointing),
+            self.approximate_gelu_eval,
+        )
+        target = torch.device(device)
+        sm = None
+        total_vram = 0
+        if target.type == "cuda" and torch.cuda.is_available():
+            sm = torch.cuda.get_device_capability(target)
+            total_vram = torch.cuda.get_device_properties(target).total_memory
+        context = execution_context_for_shape(
+            model_context,
+            batch_size=input_shape[0],
+            spatial_shape=input_shape[2:],
+            dtype=dtype,
+            device_type=target.type,
+            sm=sm,
+            total_vram_bytes=total_vram,
+            training=self.training,
+        )
+        if resolver is None:
+            return OptimizationReport("reference", context, ())
+        decisions = []
+        for module in self.modules():
+            if isinstance(module, AdaptivePointwise3d):
+                decisions.append(resolver.resolve(module.descriptor, context, context.phase))
+            elif isinstance(module, AdaptiveDepthwise3d):
+                decisions.extend(
+                    resolver.resolve(module.descriptor, context, phase)
+                    for phase in ("backward_input", "backward_weight")
+                )
+        report_warnings = tuple(
+            dict.fromkeys(
+                decision.warning for decision in decisions if decision.warning is not None
+            )
+        )
+        return OptimizationReport(
+            resolver.profiles[0].name,
+            context,
+            tuple(decisions),
+            report_warnings,
+        )
+
+
+def _checkpoint_name(config: CheckpointConfig | None) -> str:
+    if config is None:
+        return "none"
+    stages = "all" if config.stages is None else ",".join(map(str, config.stages))
+    return f"{config.style}:{stages}"
+
 
 def _factory(
     variant: str,
@@ -217,6 +294,7 @@ def _factory(
     checkpointing: CheckpointConfig | None = None,
     deep_supervision_output: DeepSupervisionOutput = "tuple",
     approximate_gelu_eval: bool = False,
+    optimization: OptimizationSource = "auto",
 ) -> MedNeXtV1:
     config = get_mednext_v1_config(
         variant,
@@ -227,12 +305,42 @@ def _factory(
         base_channels=base_channels,
         deep_supervision=deep_supervision,
     )
-    return MedNeXtV1(
+    model = MedNeXtV1(
         config,
         checkpointing=checkpointing,
         deep_supervision_output=deep_supervision_output,
         approximate_gelu_eval=approximate_gelu_eval,
     )
+    return _configure_optimization(model, optimization)
+
+
+def _configure_optimization(
+    model: MedNeXtV1, optimization: OptimizationSource
+) -> MedNeXtV1:
+    model.optimization_source = optimization
+    if optimization == "reference":
+        return model
+    if isinstance(optimization, str) and optimization in (
+        "torch",
+        "conservative",
+        "autotune",
+    ):
+        raise ValueError(
+            f"optimization={optimization!r} was removed; use 'auto' or 'reference'"
+        )
+    external = None if optimization == "auto" else optimization
+    sm = torch.cuda.get_device_capability() if torch.cuda.is_available() else None
+    resolver = ProfileRegistry(external=external).resolver_for(sm=sm)
+    model_context = ModelOptimizationContext(
+        "mednext_v1",
+        model.config.variant,
+        _checkpoint_name(model.checkpointing),
+        model.approximate_gelu_eval,
+    )
+    install_adaptive_operators(model, resolver=resolver, model_context=model_context)
+    model.__dict__["_optimization_resolver"] = resolver
+    model.__dict__["_optimization_model_context"] = model_context
+    return model
 
 
 def mednext_small(
@@ -246,6 +354,7 @@ def mednext_small(
     checkpointing: CheckpointConfig | None = None,
     deep_supervision_output: DeepSupervisionOutput = "tuple",
     approximate_gelu_eval: bool = False,
+    optimization: OptimizationSource = "auto",
 ) -> MedNeXtV1:
     """Build the published MedNeXt Small architecture."""
 
@@ -260,6 +369,7 @@ def mednext_small(
         checkpointing=checkpointing,
         deep_supervision_output=deep_supervision_output,
         approximate_gelu_eval=approximate_gelu_eval,
+        optimization=optimization,
     )
 
 
@@ -274,6 +384,7 @@ def mednext_base(
     checkpointing: CheckpointConfig | None = None,
     deep_supervision_output: DeepSupervisionOutput = "tuple",
     approximate_gelu_eval: bool = False,
+    optimization: OptimizationSource = "auto",
 ) -> MedNeXtV1:
     """Build the published MedNeXt Base architecture."""
 
@@ -288,6 +399,7 @@ def mednext_base(
         checkpointing=checkpointing,
         deep_supervision_output=deep_supervision_output,
         approximate_gelu_eval=approximate_gelu_eval,
+        optimization=optimization,
     )
 
 
@@ -302,6 +414,7 @@ def mednext_medium(
     checkpointing: CheckpointConfig | None = None,
     deep_supervision_output: DeepSupervisionOutput = "tuple",
     approximate_gelu_eval: bool = False,
+    optimization: OptimizationSource = "auto",
 ) -> MedNeXtV1:
     """Build the published MedNeXt Medium architecture."""
 
@@ -316,6 +429,7 @@ def mednext_medium(
         checkpointing=checkpointing,
         deep_supervision_output=deep_supervision_output,
         approximate_gelu_eval=approximate_gelu_eval,
+        optimization=optimization,
     )
 
 
@@ -330,6 +444,7 @@ def mednext_large(
     checkpointing: CheckpointConfig | None = None,
     deep_supervision_output: DeepSupervisionOutput = "tuple",
     approximate_gelu_eval: bool = False,
+    optimization: OptimizationSource = "auto",
 ) -> MedNeXtV1:
     """Build the published MedNeXt Large architecture."""
 
@@ -344,4 +459,5 @@ def mednext_large(
         checkpointing=checkpointing,
         deep_supervision_output=deep_supervision_output,
         approximate_gelu_eval=approximate_gelu_eval,
+        optimization=optimization,
     )

@@ -1,12 +1,6 @@
-"""Explicit model optimization policies and per-shape autotuning."""
+"""Profile-driven operator selection."""
 
-from .api import optimize, use_backend
-from .report import BackendSelections, KernelMeasurement, OptimizationReport
+from .profiles import ProfileRegistry, load_profile
+from .report import Decision, OptimizationReport
 
-__all__ = [
-    "BackendSelections",
-    "KernelMeasurement",
-    "OptimizationReport",
-    "optimize",
-    "use_backend",
-]
+__all__ = ["Decision", "OptimizationReport", "ProfileRegistry", "load_profile"]

@@ -113,7 +113,9 @@ def test_ineligible_layers_are_preserved() -> None:
 
 
 def test_mednext_state_dict_paths_are_preserved() -> None:
-    model = mednext_base(in_channels=1, out_channels=3, base_channels=2)
+    model = mednext_base(
+        in_channels=1, out_channels=3, base_channels=2, optimization="reference"
+    )
     keys = tuple(model.state_dict())
 
     count = replace_pointwise_convs(model)
