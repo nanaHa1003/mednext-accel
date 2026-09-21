@@ -3,3 +3,4 @@
 # The depthwise Triton path requires a PyTorch release exposing torch.library.triton_op.
 torch
 triton
+PyYAML>=6
