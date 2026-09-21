@@ -42,9 +42,7 @@ from mednext_accel.profiling.matrix import build_workload_cases, deduplicate_cas
 
 def test_same_kernel_across_checkpoint_contexts_is_measured_once() -> None:
     none = Workload("mednext_v1", "base", (128, 128, 128), checkpointing="none")
-    expansion = Workload(
-        "mednext_v1", "base", (128, 128, 128), checkpointing="all-expansion"
-    )
+    expansion = Workload("mednext_v1", "base", (128, 128, 128), checkpointing="all-expansion")
     shapes = ((32, 64, (128, 128, 128)),)
     first = build_workload_cases(none, (1,), pointwise_shapes=shapes, depthwise_shapes=())
     second = build_workload_cases(expansion, (1,), pointwise_shapes=shapes, depthwise_shapes=())
@@ -110,7 +108,11 @@ never inspect checkpointing or variant.
 ```python
 groups = group_cases(cases)
 assert {group.category for group in groups} == {
-    "pointwise", "regular-dx", "regular-dw", "downsample-dx", "transpose-dw"
+    "pointwise",
+    "regular-dx",
+    "regular-dw",
+    "downsample-dx",
+    "transpose-dw",
 }
 assert all(len({case.key.batch for case in group.cases}) == 1 for group in groups)
 ```
@@ -168,8 +170,7 @@ def ok_results(payload):
     return {
         "status": "ok",
         "results": [
-            {"case_id": item["case_id"], "status": "ok", "valid": True}
-            for item in payload["cases"]
+            {"case_id": item["case_id"], "status": "ok", "valid": True} for item in payload["cases"]
         ],
     }
 
@@ -231,24 +232,20 @@ def response_matches(group: KernelGroup, result: Mapping[str, object]) -> bool:
         return False
     identifiers = [item.get("case_id") for item in items if isinstance(item, dict)]
     expected = [case.identifier for case in group.cases]
-    return (
-        len(identifiers) == len(items) == len(set(identifiers))
-        and set(identifiers) == set(expected)
+    return len(identifiers) == len(items) == len(set(identifiers)) and set(identifiers) == set(
+        expected
     )
 
 
 def run_group_with_bisection(
     group: KernelGroup,
     invoke: Invoke,
-    on_attempt: Callable[[Literal["scheduled", "completed"], int, int], None]
-    | None = None,
+    on_attempt: Callable[[Literal["scheduled", "completed"], int, int], None] | None = None,
 ) -> dict[str, dict[str, object]]:
     def execute(current: KernelGroup, *, already_scheduled: bool):
         if on_attempt is not None and not already_scheduled:
             on_attempt("scheduled", 1, 0)
-        result = invoke(
-            {"kind": "kernel_group", "cases": [case_payload(c) for c in current.cases]}
-        )
+        result = invoke({"kind": "kernel_group", "cases": [case_payload(c) for c in current.cases]})
         if result.get("status") == "ok" and not response_matches(current, result):
             result = {
                 "status": "infrastructure_error",
@@ -265,9 +262,7 @@ def run_group_with_bisection(
         midpoint = len(current.cases) // 2
         left = replace(current, cases=current.cases[:midpoint])
         right = replace(current, cases=current.cases[midpoint:])
-        return execute(left, already_scheduled=False) | execute(
-            right, already_scheduled=False
-        )
+        return execute(left, already_scheduled=False) | execute(right, already_scheduled=False)
 
     return execute(group, already_scheduled=True)
 ```
@@ -327,8 +322,10 @@ def test_duplicate_workloads_search_once() -> None:
     plan = build_execution_plan(
         campaign,
         discover=lambda workload: shapes,
-        search=lambda workload: calls.append(workload)
-        or BatchSearchResult((1, 2), {1: reference_step(), 2: reference_step()}),
+        search=lambda workload: (
+            calls.append(workload)
+            or BatchSearchResult((1, 2), {1: reference_step(), 2: reference_step()})
+        ),
     )
     assert len(calls) == 1
     assert len(plan.workloads) == 1
@@ -468,9 +465,7 @@ def test_equal_consecutive_signatures_form_one_segment() -> None:
 
 
 def test_sample_gap_and_decision_change_split_segments() -> None:
-    native = (
-        ("pointwise_conv3d", "regular", "training", (16, 16, 16), 8, 16, "reference", ()),
-    )
+    native = (("pointwise_conv3d", "regular", "training", (16, 16, 16), 8, 16, "reference", ()),)
     gemm = (
         (
             "pointwise_conv3d",
@@ -877,8 +872,7 @@ execution = {
     "kernel_case_count": statistics.kernel_case_count,
     "kernel_group_count": statistics.kernel_group_count,
     "whole_model_validation_count": statistics.whole_model_validation_count,
-    "deduplicated_reference_count": statistics.requested_case_count
-    - statistics.kernel_case_count,
+    "deduplicated_reference_count": statistics.requested_case_count - statistics.kernel_case_count,
 }
 ```
 

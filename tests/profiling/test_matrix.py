@@ -4,9 +4,7 @@ from mednext_accel.profiling.matrix import build_workload_cases, deduplicate_cas
 
 def test_same_kernel_across_checkpoint_contexts_is_measured_once() -> None:
     none = Workload("mednext_v1", "base", (128, 128, 128), checkpointing="none")
-    expansion = Workload(
-        "mednext_v1", "base", (128, 128, 128), checkpointing="all-expansion"
-    )
+    expansion = Workload("mednext_v1", "base", (128, 128, 128), checkpointing="all-expansion")
     shapes = ((32, 64, (128, 128, 128)),)
     first = build_workload_cases(none, (1,), pointwise_shapes=shapes, depthwise_shapes=())
     second = build_workload_cases(expansion, (1,), pointwise_shapes=shapes, depthwise_shapes=())
