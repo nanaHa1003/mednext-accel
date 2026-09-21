@@ -30,15 +30,18 @@ def main() -> None:
 
     if not torch.cuda.is_available():
         raise SystemExit("CUDA is required")
-    phase = args.phase or (
-        "backward_weight" if args.kind == "transpose" else "backward_input"
+    phase = args.phase or ("backward_weight" if args.kind == "transpose" else "backward_input")
+    result = _invoke(
+        {
+            "kind": "depthwise",
+            "batch": args.batch_size,
+            "in_channels": args.channels,
+            "kernel_size": 3,
+            "spatial_shape": [args.spatial] * 3,
+            "direction": args.kind,
+            "phase": phase,
+        }
     )
-    result = _invoke({
-        "kind": "depthwise", "batch": args.batch_size,
-        "in_channels": args.channels, "kernel_size": 3,
-        "spatial_shape": [args.spatial] * 3, "direction": args.kind,
-        "phase": phase,
-    })
     if result.get("status") != "ok":
         raise SystemExit(result.get("message", result["status"]))
     native_ms = float(result["reference_ms"])

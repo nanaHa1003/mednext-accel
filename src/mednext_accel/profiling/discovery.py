@@ -42,20 +42,43 @@ def _descriptor(module: nn.Module, role: str) -> OperatorDescriptor | None:
             "transpose" if transpose else "downsample" if module.stride[0] == 2 else "regular"
         )
         return OperatorDescriptor(
-            family, direction, module.in_channels, module.out_channels,
-            module.kernel_size, module.stride, module.padding, module.dilation,
-            module.groups, role,
+            family,
+            direction,
+            module.in_channels,
+            module.out_channels,
+            module.kernel_size,
+            module.stride,
+            module.padding,
+            module.dilation,
+            module.groups,
+            role,
         )
     if isinstance(module, nn.GroupNorm):
         channels = module.num_channels
         return OperatorDescriptor(
-            "group_norm", "forward", channels, channels, (1, 1, 1),
-            (1, 1, 1), (0, 0, 0), (1, 1, 1), module.num_groups, role,
+            "group_norm",
+            "forward",
+            channels,
+            channels,
+            (1, 1, 1),
+            (1, 1, 1),
+            (0, 0, 0),
+            (1, 1, 1),
+            module.num_groups,
+            role,
         )
     if isinstance(module, (nn.GELU, EvalModeGELU)):
         return OperatorDescriptor(
-            "gelu", "forward", 1, 1, (1, 1, 1), (1, 1, 1),
-            (0, 0, 0), (1, 1, 1), 1, role,
+            "gelu",
+            "forward",
+            1,
+            1,
+            (1, 1, 1),
+            (1, 1, 1),
+            (0, 0, 0),
+            (1, 1, 1),
+            1,
+            role,
         )
     return None
 
@@ -67,7 +90,9 @@ def discover_operators(model: nn.Module) -> DiscoveryResult:
         if descriptor is None:
             continue
         key = (
-            *descriptor.signature, descriptor.padding, descriptor.dilation,
+            *descriptor.signature,
+            descriptor.padding,
+            descriptor.dilation,
             descriptor.groups,
         )
         if key not in grouped:
@@ -78,9 +103,13 @@ def discover_operators(model: nn.Module) -> DiscoveryResult:
         for _, item in sorted(grouped.items(), key=lambda pair: repr(pair[0]))
     )
     config = getattr(model, "config", None)
-    identity = asdict(config) if config is not None else {
-        "class": f"{type(model).__module__}.{type(model).__qualname__}",
-        "operators": [item.descriptor.to_primitive() for item in operators],
-    }
+    identity = (
+        asdict(config)
+        if config is not None
+        else {
+            "class": f"{type(model).__module__}.{type(model).__qualname__}",
+            "operators": [item.descriptor.to_primitive() for item in operators],
+        }
+    )
     encoded = json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
     return DiscoveryResult(operators, hashlib.sha256(encoded).hexdigest()[:16])

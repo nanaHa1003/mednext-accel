@@ -16,17 +16,21 @@ def test_descriptor_has_a_stable_primitive_identity() -> None:
         groups=32,
     )
     assert descriptor.to_primitive()["family"] == "depthwise_conv3d"
-    assert descriptor.signature == (
-        "depthwise_conv3d", "regular", 32, 32, (3, 3, 3), (1, 1, 1)
-    )
+    assert descriptor.signature == ("depthwise_conv3d", "regular", 32, 32, (3, 3, 3), (1, 1, 1))
 
 
 def test_execution_context_records_runtime_resolution_inputs() -> None:
     context = ExecutionContext(
-        phase="training", device_type="cuda", sm=(12, 0),
-        total_vram_bytes=32 * 2**30, dtype="bfloat16", batch_size=3,
-        spatial_shape=(128, 128, 128), model_family="mednext_v1",
-        variant="base", checkpointing="all-expansion",
+        phase="training",
+        device_type="cuda",
+        sm=(12, 0),
+        total_vram_bytes=32 * 2**30,
+        dtype="bfloat16",
+        batch_size=3,
+        spatial_shape=(128, 128, 128),
+        model_family="mednext_v1",
+        variant="base",
+        checkpointing="all-expansion",
     )
     assert context.spatial_volume == 128**3
     assert context.total_vram_gib == 32
@@ -35,7 +39,14 @@ def test_execution_context_records_runtime_resolution_inputs() -> None:
 def test_descriptors_reject_invalid_dimensions() -> None:
     with pytest.raises(ValueError, match="batch_size"):
         ExecutionContext(
-            phase="training", device_type="cpu", sm=None, total_vram_bytes=0,
-            dtype="float32", batch_size=0, spatial_shape=(8, 8, 8),
-            model_family="mednext_v1", variant="base", checkpointing="none",
+            phase="training",
+            device_type="cpu",
+            sm=None,
+            total_vram_bytes=0,
+            dtype="float32",
+            batch_size=0,
+            spatial_shape=(8, 8, 8),
+            model_family="mednext_v1",
+            variant="base",
+            checkpointing="none",
         )

@@ -70,9 +70,7 @@ def main() -> None:
         .cuda()
         .train()
     )
-    report = model.explain_optimization(
-        input_shape=tuple(args.shape), dtype=dtype, device="cuda"
-    )
+    report = model.explain_optimization(input_shape=tuple(args.shape), dtype=dtype, device="cuda")
     if args.compile_mode != "none":
         model.compile(mode=args.compile_mode, fullgraph=args.fullgraph)
     example = torch.randn(tuple(args.shape), device="cuda", dtype=dtype)

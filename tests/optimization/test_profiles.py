@@ -14,9 +14,7 @@ PROFILE = {
         "provenance": {},
     },
     "defaults": {
-        "pointwise_conv3d": {
-            "training": {"implementation": "reference", "parameters": {}}
-        }
+        "pointwise_conv3d": {"training": {"implementation": "reference", "parameters": {}}}
     },
     "rules": [],
     "overrides": [],

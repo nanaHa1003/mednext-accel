@@ -65,17 +65,13 @@ def load_campaign(source: CampaignSource | None) -> Campaign:
     data = _load_mapping(source)
     preset = str(data.get("preset", "mednext-v1"))
     if preset not in ("mednext-v1", "all"):
-        raise ValueError(
-            f"preset {preset!r} is unavailable; installed model families: mednext-v1"
-        )
+        raise ValueError(f"preset {preset!r} is unavailable; installed model families: mednext-v1")
     raw_search = _mapping(data.get("batch_search", {}), "batch_search")
     batch_search = BatchSearch(
         strategy=str(raw_search.get("strategy", "auto")),  # type: ignore[arg-type]
         memory_fraction=float(raw_search.get("memory_fraction", 0.90)),
         dense_until=int(raw_search.get("dense_until", 8)),
-        maximum=(
-            None if raw_search.get("maximum") is None else int(raw_search["maximum"])
-        ),
+        maximum=(None if raw_search.get("maximum") is None else int(raw_search["maximum"])),
     )
     raw_workloads = data.get("workloads")
     if raw_workloads is None:
@@ -98,15 +94,18 @@ def load_campaign(source: CampaignSource | None) -> Campaign:
             for context in contexts:
                 if context not in _CHECKPOINT_CONTEXTS:
                     raise ValueError(f"unknown checkpoint context {context!r}")
-                expanded.append(Workload(
-                    model_family="mednext_v1", variant=variant,
-                    spatial=spatial,  # type: ignore[arg-type]
-                    dtypes=tuple(item.get("dtypes", ("bfloat16",))),
-                    phases=tuple(item.get("phases", ("training", "inference"))),
-                    checkpointing=context,
-                    in_channels=int(item.get("in_channels", 1)),
-                    out_channels=int(item.get("out_channels", 3)),
-                ))
+                expanded.append(
+                    Workload(
+                        model_family="mednext_v1",
+                        variant=variant,
+                        spatial=spatial,  # type: ignore[arg-type]
+                        dtypes=tuple(item.get("dtypes", ("bfloat16",))),
+                        phases=tuple(item.get("phases", ("training", "inference"))),
+                        checkpointing=context,
+                        in_channels=int(item.get("in_channels", 1)),
+                        out_channels=int(item.get("out_channels", 3)),
+                    )
+                )
         workloads = tuple(expanded)
     return Campaign(
         preset=preset,

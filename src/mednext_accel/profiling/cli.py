@@ -16,7 +16,9 @@ def _parser() -> argparse.ArgumentParser:
     command.add_argument("workload", nargs="?", help="optional YAML campaign")
     command.add_argument("--preset", choices=("mednext-v1", "all"))
     command.add_argument(
-        "--progress", choices=("auto", "plain", "quiet"), default="auto",
+        "--progress",
+        choices=("auto", "plain", "quiet"),
+        default="auto",
         help="progress display (default: auto; plain when output is redirected)",
     )
     return parser

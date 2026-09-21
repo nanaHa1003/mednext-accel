@@ -182,8 +182,7 @@ def test_explain_optimization_reports_batch_three_gemm() -> None:
         input_shape=(3, 1, 128, 128, 128), dtype="bfloat16", device="cuda:0"
     )
     assert any(
-        decision.implementation == "pointwise_gemm_per_sample"
-        for decision in report.decisions
+        decision.implementation == "pointwise_gemm_per_sample" for decision in report.decisions
     )
     assert any(
         decision.descriptor.in_channels == 32
@@ -203,9 +202,7 @@ def test_explain_optimization_reports_batch_three_gemm() -> None:
     ],
 )
 def test_optimization_report_uses_campaign_checkpoint_names(config, expected) -> None:
-    model = mednext_small(
-        in_channels=1, out_channels=2, base_channels=2, checkpointing=config
-    )
+    model = mednext_small(in_channels=1, out_channels=2, base_channels=2, checkpointing=config)
     report = model.explain_optimization(
         input_shape=(1, 1, 32, 32, 32), dtype="bfloat16", device="cpu"
     )

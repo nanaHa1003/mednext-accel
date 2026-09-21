@@ -23,9 +23,7 @@ def parse_args() -> argparse.Namespace:
         choices=("default", "reduce-overhead", "max-autotune", "max-autotune-no-cudagraphs"),
         default="default",
     )
-    parser.add_argument(
-        "--optimization", choices=("auto", "reference"), default="auto"
-    )
+    parser.add_argument("--optimization", choices=("auto", "reference"), default="auto")
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument("--steps", type=int, default=20)
     parser.add_argument("--output", type=Path)

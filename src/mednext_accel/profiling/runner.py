@@ -27,8 +27,10 @@ def _factory(variant: str):
     from ..models.mednext_v1 import mednext_base, mednext_large, mednext_medium, mednext_small
 
     return {
-        "small": mednext_small, "base": mednext_base,
-        "medium": mednext_medium, "large": mednext_large,
+        "small": mednext_small,
+        "base": mednext_base,
+        "medium": mednext_medium,
+        "large": mednext_large,
     }[variant]
 
 
@@ -55,12 +57,16 @@ def _model_probe(payload: dict[str, object]) -> dict[str, object]:
     workload = payload["workload"]
     assert isinstance(workload, dict)
     optimization = payload.get("optimization", "reference")
-    model = _factory(str(workload["variant"]))(
-        in_channels=int(workload["in_channels"]),
-        out_channels=int(workload["out_channels"]),
-        checkpointing=_checkpoint(str(workload["checkpointing"])),
-        optimization=optimization,
-    ).cuda().train()
+    model = (
+        _factory(str(workload["variant"]))(
+            in_channels=int(workload["in_channels"]),
+            out_channels=int(workload["out_channels"]),
+            checkpointing=_checkpoint(str(workload["checkpointing"])),
+            optimization=optimization,
+        )
+        .cuda()
+        .train()
+    )
     compile_mode = str(payload.get("compile_mode", "default"))
     model.compile(mode=compile_mode, fullgraph=True)
     batch = int(payload["batch"])
@@ -91,10 +97,12 @@ def _pointwise_probe(payload: dict[str, object]) -> dict[str, object]:
     channels = int(payload["in_channels"])
     outputs = int(payload["out_channels"])
     spatial = tuple(int(item) for item in payload["spatial_shape"])
-    x = torch.randn(batch, channels, *spatial, device="cuda", dtype=torch.bfloat16,
-                    requires_grad=True)
-    weight = torch.randn(outputs, channels, 1, 1, 1, device="cuda", dtype=torch.bfloat16,
-                         requires_grad=True)
+    x = torch.randn(
+        batch, channels, *spatial, device="cuda", dtype=torch.bfloat16, requires_grad=True
+    )
+    weight = torch.randn(
+        outputs, channels, 1, 1, 1, device="cuda", dtype=torch.bfloat16, requires_grad=True
+    )
     bias = torch.randn(outputs, device="cuda", dtype=torch.bfloat16, requires_grad=True)
     gradient = torch.randn(batch, outputs, *spatial, device="cuda", dtype=torch.bfloat16)
 
@@ -105,22 +113,25 @@ def _pointwise_probe(payload: dict[str, object]) -> dict[str, object]:
     def candidate():
         flat = x.flatten(2)
         matrix = weight.flatten(1)
-        output = torch.stack([
-            torch.addmm(bias[:, None], matrix, sample) for sample in flat.unbind()
-        ]).reshape(batch, outputs, *spatial)
+        output = torch.stack(
+            [torch.addmm(bias[:, None], matrix, sample) for sample in flat.unbind()]
+        ).reshape(batch, outputs, *spatial)
         return (output, *torch.autograd.grad(output, (x, weight, bias), gradient))
 
     expected, actual = native(), candidate()
     valid = all(
-        torch.allclose(a, b, rtol=0.02, atol=0.02)
-        for a, b in zip(actual, expected, strict=True)
+        torch.allclose(a, b, rtol=0.02, atol=0.02) for a, b in zip(actual, expected, strict=True)
     )
     native_ms, native_peak = _timed(native)
     candidate_ms, candidate_peak = _timed(candidate)
     return {
-        "status": "ok", "valid": valid, "reference_ms": native_ms,
-        "candidate_ms": candidate_ms, "reference_peak_bytes": native_peak,
-        "candidate_peak_bytes": candidate_peak, "parameters": [],
+        "status": "ok",
+        "valid": valid,
+        "reference_ms": native_ms,
+        "candidate_ms": candidate_ms,
+        "reference_peak_bytes": native_peak,
+        "candidate_peak_bytes": candidate_peak,
+        "parameters": [],
     }
 
 
@@ -138,28 +149,32 @@ def _depthwise_probe(payload: dict[str, object]) -> dict[str, object]:
     phase = str(payload["phase"])
     stride = 2 if direction in ("downsample", "transpose") else 1
     x = torch.randn(batch, channels, *spatial, device="cuda", dtype=torch.bfloat16)
-    weight = torch.randn(
-        channels, 1, kernel, kernel, kernel, device="cuda", dtype=torch.bfloat16
-    )
+    weight = torch.randn(channels, 1, kernel, kernel, kernel, device="cuda", dtype=torch.bfloat16)
     padding = kernel // 2
     if direction == "transpose":
-        output = functional.conv_transpose3d(
-            x, weight, stride=2, padding=padding, groups=channels
-        )
+        output = functional.conv_transpose3d(x, weight, stride=2, padding=padding, groups=channels)
     else:
-        output = functional.conv3d(
-            x, weight, stride=stride, padding=padding, groups=channels
-        )
+        output = functional.conv3d(x, weight, stride=stride, padding=padding, groups=channels)
     gradient = torch.randn_like(output)
 
     if direction == "transpose" and phase == "backward_weight":
+
         def native():
             return torch.ops.aten.convolution_backward(
-                gradient, x, weight, None, [2] * 3, [padding] * 3, [1] * 3,
-                True, [0] * 3, channels, [False, True, False],
+                gradient,
+                x,
+                weight,
+                None,
+                [2] * 3,
+                [padding] * 3,
+                [1] * 3,
+                True,
+                [0] * 3,
+                channels,
+                [False, True, False],
             )[1]
 
-        splits = max(1, min(512, round(64 * batch * spatial[0] ** 3 / 64 ** 3)))
+        splits = max(1, min(512, round(64 * batch * spatial[0] ** 3 / 64**3)))
 
         def candidate():
             return backend.depthwise_transpose_weight_grad(
@@ -169,24 +184,42 @@ def _depthwise_probe(payload: dict[str, object]) -> dict[str, object]:
         implementation = "triton_transpose_split_dw"
         parameters = (("dw_splits", splits), ("dw_block", 512))
     elif direction == "downsample" and phase == "backward_input":
+
         def native():
             return torch.ops.aten.convolution_backward(
-                gradient, x, weight, None, [2] * 3, [padding] * 3, [1] * 3,
-                False, [0] * 3, channels, [True, False, False],
+                gradient,
+                x,
+                weight,
+                None,
+                [2] * 3,
+                [padding] * 3,
+                [1] * 3,
+                False,
+                [0] * 3,
+                channels,
+                [True, False, False],
             )[0]
 
         def candidate():
-            return backend.depthwise_stride2_input_grad(
-                gradient, weight, spatial, block=128
-            )
+            return backend.depthwise_stride2_input_grad(gradient, weight, spatial, block=128)
 
         implementation = "triton_downsample_dx"
         parameters = (("dx_block", 128),)
     elif direction == "regular" and phase == "backward_input":
+
         def native():
             return torch.ops.aten.convolution_backward(
-                gradient, x, weight, None, [1] * 3, [padding] * 3, [1] * 3,
-                False, [0] * 3, channels, [True, False, False],
+                gradient,
+                x,
+                weight,
+                None,
+                [1] * 3,
+                [padding] * 3,
+                [1] * 3,
+                False,
+                [0] * 3,
+                channels,
+                [True, False, False],
             )[0]
 
         def candidate():
@@ -195,13 +228,23 @@ def _depthwise_probe(payload: dict[str, object]) -> dict[str, object]:
         implementation = "triton_depthwise_dx"
         parameters = (("dx_block", 128),)
     elif direction == "regular" and phase == "backward_weight":
+
         def native():
             return torch.ops.aten.convolution_backward(
-                gradient, x, weight, None, [1] * 3, [padding] * 3, [1] * 3,
-                False, [0] * 3, channels, [False, True, False],
+                gradient,
+                x,
+                weight,
+                None,
+                [1] * 3,
+                [padding] * 3,
+                [1] * 3,
+                False,
+                [0] * 3,
+                channels,
+                [False, True, False],
             )[1]
 
-        splits = max(1, min(512, round(64 * batch * spatial[0] ** 3 / 128 ** 3)))
+        splits = max(1, min(512, round(64 * batch * spatial[0] ** 3 / 128**3)))
 
         def candidate():
             return backend.depthwise_weight_grad(
@@ -218,10 +261,14 @@ def _depthwise_probe(payload: dict[str, object]) -> dict[str, object]:
     native_ms, native_peak = _timed(native)
     candidate_ms, candidate_peak = _timed(candidate)
     return {
-        "status": "ok", "valid": relative.item() < 0.02,
-        "implementation": implementation, "reference_ms": native_ms,
-        "candidate_ms": candidate_ms, "reference_peak_bytes": native_peak,
-        "candidate_peak_bytes": candidate_peak, "parameters": parameters,
+        "status": "ok",
+        "valid": relative.item() < 0.02,
+        "implementation": implementation,
+        "reference_ms": native_ms,
+        "candidate_ms": candidate_ms,
+        "reference_peak_bytes": native_peak,
+        "candidate_peak_bytes": candidate_peak,
+        "parameters": parameters,
     }
 
 
@@ -255,24 +302,33 @@ def _pointwise_shapes(workload: Workload) -> tuple[tuple[int, int, tuple[int, in
     import torch
     from torch import nn
 
-    model = _factory(workload.variant)(
-        in_channels=workload.in_channels, out_channels=workload.out_channels,
-        checkpointing=_checkpoint(workload.checkpointing), optimization="reference",
-    ).to("meta").eval()
+    model = (
+        _factory(workload.variant)(
+            in_channels=workload.in_channels,
+            out_channels=workload.out_channels,
+            checkpointing=_checkpoint(workload.checkpointing),
+            optimization="reference",
+        )
+        .to("meta")
+        .eval()
+    )
     found: set[tuple[int, int, tuple[int, int, int]]] = set()
     hooks = []
     for module in model.modules():
         if type(module) is nn.Conv3d and module.kernel_size == (1, 1, 1):
-            hooks.append(module.register_forward_hook(
-                lambda current, inputs, output: found.add((
-                    current.in_channels, current.out_channels,
-                    tuple(int(item) for item in inputs[0].shape[2:]),
-                ))
-            ))
+            hooks.append(
+                module.register_forward_hook(
+                    lambda current, inputs, output: found.add(
+                        (
+                            current.in_channels,
+                            current.out_channels,
+                            tuple(int(item) for item in inputs[0].shape[2:]),
+                        )
+                    )
+                )
+            )
     with torch.no_grad():
-        model(torch.empty(
-            1, workload.in_channels, *workload.spatial, device="meta"
-        ))
+        model(torch.empty(1, workload.in_channels, *workload.spatial, device="meta"))
     for hook in hooks:
         hook.remove()
     return tuple(sorted(found))
@@ -284,10 +340,16 @@ def _depthwise_shapes(
     import torch
     from torch import nn
 
-    model = _factory(workload.variant)(
-        in_channels=workload.in_channels, out_channels=workload.out_channels,
-        checkpointing=_checkpoint(workload.checkpointing), optimization="reference",
-    ).to("meta").eval()
+    model = (
+        _factory(workload.variant)(
+            in_channels=workload.in_channels,
+            out_channels=workload.out_channels,
+            checkpointing=_checkpoint(workload.checkpointing),
+            optimization="reference",
+        )
+        .to("meta")
+        .eval()
+    )
     found: set[tuple[str, int, int, tuple[int, int, int]]] = set()
     hooks = []
     for module in model.modules():
@@ -296,15 +358,24 @@ def _depthwise_shapes(
             and module.groups == module.in_channels == module.out_channels
         ):
             direction = (
-                "transpose" if type(module) is nn.ConvTranspose3d
-                else "downsample" if module.stride[0] == 2 else "regular"
+                "transpose"
+                if type(module) is nn.ConvTranspose3d
+                else "downsample"
+                if module.stride[0] == 2
+                else "regular"
             )
-            hooks.append(module.register_forward_hook(
-                lambda current, inputs, output, direction=direction: found.add((
-                    direction, current.in_channels, current.kernel_size[0],
-                    tuple(int(item) for item in inputs[0].shape[2:]),
-                ))
-            ))
+            hooks.append(
+                module.register_forward_hook(
+                    lambda current, inputs, output, direction=direction: found.add(
+                        (
+                            direction,
+                            current.in_channels,
+                            current.kernel_size[0],
+                            tuple(int(item) for item in inputs[0].shape[2:]),
+                        )
+                    )
+                )
+            )
     with torch.no_grad():
         model(torch.empty(1, workload.in_channels, *workload.spatial, device="meta"))
     for hook in hooks:
@@ -322,11 +393,11 @@ def _batches(
 
     def probe(batch: int) -> ProbeResult:
         if progress is not None:
-            progress.emit(ProgressEvent(
-                "status", "batch-search", message=f"probing batch={batch}"
-            ))
+            progress.emit(ProgressEvent("status", "batch-search", message=f"probing batch={batch}"))
         payload = {
-            "kind": "model", "batch": batch, "workload": asdict(workload),
+            "kind": "model",
+            "batch": batch,
+            "workload": asdict(workload),
             "compile_mode": campaign.compile_mode,
         }
         result = _invoke(payload)
@@ -335,18 +406,21 @@ def _batches(
         if progress is not None:
             peak = int(result.get("peak_bytes", 0)) / 1024**3
             state = "feasible" if feasible else str(result.get("status", "failed"))
-            progress.emit(ProgressEvent(
-                "status", "batch-search",
-                message=f"batch={batch} {state} peak={peak:.1f} GiB",
-            ))
+            progress.emit(
+                ProgressEvent(
+                    "status",
+                    "batch-search",
+                    message=f"batch={batch} {state} peak={peak:.1f} GiB",
+                )
+            )
         return ProbeResult(
-            batch, feasible, int(result.get("peak_bytes", total_vram + 1)),
+            batch,
+            feasible,
+            int(result.get("peak_bytes", total_vram + 1)),
             None if feasible else str(result.get("message", result.get("status"))),
         )
 
-    result = search_batches(
-        campaign.batch_search, total_vram_bytes=total_vram, probe=probe
-    )
+    result = search_batches(campaign.batch_search, total_vram_bytes=total_vram, probe=probe)
     return (
         tuple(item.batch for item in result.probes if item.feasible),
         model_results,
@@ -387,56 +461,70 @@ def run_campaign(
             f"{workload.spatial} · {workload.checkpointing}"
         )
         if progress is None:
-            print(f"[{workload_index}/{len(campaign.workloads)}] {workload.variant} "
-                  f"{workload.spatial} {workload.checkpointing}", file=sys.stderr)
+            print(
+                f"[{workload_index}/{len(campaign.workloads)}] {workload.variant} "
+                f"{workload.spatial} {workload.checkpointing}",
+                file=sys.stderr,
+            )
         else:
             progress.emit(ProgressEvent("workload", "workload", message=workload_message))
-            progress.emit(ProgressEvent(
-                "stage_start", "batch-search", message="Batch search · estimating workload"
-            ))
-        batches, reference_steps = _batches(
-            campaign, workload, total_vram, progress=progress
-        )
+            progress.emit(
+                ProgressEvent(
+                    "stage_start", "batch-search", message="Batch search · estimating workload"
+                )
+            )
+        batches, reference_steps = _batches(campaign, workload, total_vram, progress=progress)
         shapes = _pointwise_shapes(workload)
         depthwise_shapes = _depthwise_shapes(workload)
         depthwise_probe_count = sum(
             1 if direction in ("transpose", "downsample") else 2
             for direction, *_ in depthwise_shapes
         )
-        operator_total = len(batches) * (
-            len(shapes) + depthwise_probe_count + 1
-        )
+        operator_total = len(batches) * (len(shapes) + depthwise_probe_count + 1)
         operator_completed = 0
         if progress is not None:
-            progress.emit(ProgressEvent(
-                "stage_start", "operators", total=operator_total,
-                message=workload_message,
-            ))
+            progress.emit(
+                ProgressEvent(
+                    "stage_start",
+                    "operators",
+                    total=operator_total,
+                    message=workload_message,
+                )
+            )
 
         def advance(message: str, total: int = operator_total) -> None:
             nonlocal operator_completed
             operator_completed += 1
             if progress is not None:
-                progress.emit(ProgressEvent(
-                    "advance", "operators", completed=operator_completed,
-                    total=total, message=message,
-                ))
+                progress.emit(
+                    ProgressEvent(
+                        "advance",
+                        "operators",
+                        completed=operator_completed,
+                        total=total,
+                        message=message,
+                    )
+                )
 
         def starting(message: str) -> None:
             if progress is not None:
-                progress.emit(ProgressEvent(
-                    "item_start", "operators", message=f"running · {message}"
-                ))
+                progress.emit(
+                    ProgressEvent("item_start", "operators", message=f"running · {message}")
+                )
 
         for batch in batches:
             batch_measurements: list[Measurement] = []
             for in_channels, out_channels, spatial in shapes:
                 starting(f"batch={batch} pointwise_conv3d/training {spatial}")
-                result = _invoke({
-                    "kind": "pointwise", "batch": batch,
-                    "in_channels": in_channels, "out_channels": out_channels,
-                    "spatial_shape": spatial,
-                })
+                result = _invoke(
+                    {
+                        "kind": "pointwise",
+                        "batch": batch,
+                        "in_channels": in_channels,
+                        "out_channels": out_channels,
+                        "spatial_shape": spatial,
+                    }
+                )
                 if result.get("status") != "ok":
                     advance(
                         f"batch={batch} pointwise_conv3d/training {spatial} · "
@@ -444,10 +532,15 @@ def run_campaign(
                     )
                     continue
                 measurement = Measurement(
-                    family="pointwise_conv3d", direction="regular", phase="training",
-                    implementation="pointwise_gemm_per_sample", batch=batch,
-                    spatial_shape=spatial, in_channels=in_channels,
-                    out_channels=out_channels, dtype="bfloat16",
+                    family="pointwise_conv3d",
+                    direction="regular",
+                    phase="training",
+                    implementation="pointwise_gemm_per_sample",
+                    batch=batch,
+                    spatial_shape=spatial,
+                    in_channels=in_channels,
+                    out_channels=out_channels,
+                    dtype="bfloat16",
                     checkpointing=workload.checkpointing,
                     reference_ms=float(result["reference_ms"]),
                     candidate_ms=float(result["candidate_ms"]),
@@ -459,9 +552,9 @@ def run_campaign(
                     ),
                 )
                 batch_measurements.append(measurement)
-                choice = "candidate" if candidate_wins(
-                    measurement, campaign.objective
-                ) else "reference"
+                choice = (
+                    "candidate" if candidate_wins(measurement, campaign.objective) else "reference"
+                )
                 advance(
                     f"batch={batch} pointwise_conv3d/training {spatial} · "
                     f"ref={float(result['reference_ms']):.3f} ms · "
@@ -469,18 +562,25 @@ def run_campaign(
                 )
             for direction, channels, kernel, spatial in depthwise_shapes:
                 phases = (
-                    ("backward_weight",) if direction == "transpose"
-                    else ("backward_input",) if direction == "downsample"
+                    ("backward_weight",)
+                    if direction == "transpose"
+                    else ("backward_input",)
+                    if direction == "downsample"
                     else ("backward_input", "backward_weight")
                 )
                 for phase in phases:
                     starting(f"batch={batch} depthwise/{direction}/{phase} {spatial}")
-                    result = _invoke({
-                        "kind": "depthwise", "batch": batch,
-                        "in_channels": channels, "kernel_size": kernel,
-                        "spatial_shape": spatial, "direction": direction,
-                        "phase": phase,
-                    })
+                    result = _invoke(
+                        {
+                            "kind": "depthwise",
+                            "batch": batch,
+                            "in_channels": channels,
+                            "kernel_size": kernel,
+                            "spatial_shape": spatial,
+                            "direction": direction,
+                            "phase": phase,
+                        }
+                    )
                     if result.get("status") != "ok":
                         advance(
                             f"batch={batch} depthwise/{direction}/{phase} {spatial} · "
@@ -489,13 +589,19 @@ def run_campaign(
                         continue
                     family = (
                         "depthwise_conv_transpose3d"
-                        if direction == "transpose" else "depthwise_conv3d"
+                        if direction == "transpose"
+                        else "depthwise_conv3d"
                     )
                     measurement = Measurement(
-                        family=family, direction=direction, phase=phase,
-                        implementation=str(result["implementation"]), batch=batch,
-                        spatial_shape=spatial, in_channels=channels,
-                        out_channels=channels, dtype="bfloat16",
+                        family=family,
+                        direction=direction,
+                        phase=phase,
+                        implementation=str(result["implementation"]),
+                        batch=batch,
+                        spatial_shape=spatial,
+                        in_channels=channels,
+                        out_channels=channels,
+                        dtype="bfloat16",
                         checkpointing=workload.checkpointing,
                         reference_ms=float(result["reference_ms"]),
                         candidate_ms=float(result["candidate_ms"]),
@@ -507,9 +613,11 @@ def run_campaign(
                         ),
                     )
                     batch_measurements.append(measurement)
-                    choice = "candidate" if candidate_wins(
-                        measurement, campaign.objective
-                    ) else "reference"
+                    choice = (
+                        "candidate"
+                        if candidate_wins(measurement, campaign.objective)
+                        else "reference"
+                    )
                     advance(
                         f"batch={batch} depthwise/{direction}/{phase} {spatial} · "
                         f"ref={float(result['reference_ms']):.3f} ms · "
@@ -522,18 +630,21 @@ def run_campaign(
                 objective=campaign.objective,
             )
             starting(f"batch={batch} whole-model validation")
-            candidate_step = _invoke({
-                "kind": "model", "batch": batch, "workload": asdict(workload),
-                "compile_mode": campaign.compile_mode,
-                "optimization": profile_to_primitive(provisional),
-            })
-            reference_step = reference_steps[batch]
-            accepted = _whole_model_accepts(
-                campaign.objective, reference_step, candidate_step
+            candidate_step = _invoke(
+                {
+                    "kind": "model",
+                    "batch": batch,
+                    "workload": asdict(workload),
+                    "compile_mode": campaign.compile_mode,
+                    "optimization": profile_to_primitive(provisional),
+                }
             )
+            reference_step = reference_steps[batch]
+            accepted = _whole_model_accepts(campaign.objective, reference_step, candidate_step)
             candidate_summary = (
                 f"{float(candidate_step['step_ms']):.3f} ms"
-                if candidate_step.get("status") == "ok" else str(candidate_step.get("status"))
+                if candidate_step.get("status") == "ok"
+                else str(candidate_step.get("status"))
             )
             advance(
                 f"batch={batch} whole-model validation · "
@@ -541,9 +652,7 @@ def run_campaign(
                 f"candidate={candidate_summary} → {'accepted' if accepted else 'rejected'}"
             )
             if not accepted:
-                batch_measurements = [
-                    replace(item, valid=False) for item in batch_measurements
-                ]
+                batch_measurements = [replace(item, valid=False) for item in batch_measurements]
                 if progress is None:
                     print(
                         f"  batch {batch}: isolated winners rejected by whole-model validation",

@@ -68,8 +68,8 @@ def search_batches(
         return BatchSearchResult((results[1],), 0)
 
     explicit_limit = config.maximum
-    dense_limit = config.dense_until if explicit_limit is None else min(
-        config.dense_until, explicit_limit
+    dense_limit = (
+        config.dense_until if explicit_limit is None else min(config.dense_until, explicit_limit)
     )
     lower = 1
     upper: int | None = None

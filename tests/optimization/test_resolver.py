@@ -7,19 +7,30 @@ from mednext_accel.optimization.resolver import OptimizationResolver, scale_work
 
 def pointwise_descriptor(in_channels: int = 32, out_channels: int = 64):
     return OperatorDescriptor(
-        family="pointwise_conv3d", direction="regular",
-        in_channels=in_channels, out_channels=out_channels,
-        kernel_size=(1, 1, 1), stride=(1, 1, 1), padding=(0, 0, 0),
-        dilation=(1, 1, 1), groups=1,
+        family="pointwise_conv3d",
+        direction="regular",
+        in_channels=in_channels,
+        out_channels=out_channels,
+        kernel_size=(1, 1, 1),
+        stride=(1, 1, 1),
+        padding=(0, 0, 0),
+        dilation=(1, 1, 1),
+        groups=1,
     )
 
 
 def cuda_context(*, batch=3, sm=(12, 0), vram=32, approximate=False):
     return ExecutionContext(
-        phase="training", device_type="cuda", sm=sm,
-        total_vram_bytes=vram * 2**30, dtype="bfloat16", batch_size=batch,
-        spatial_shape=(128, 128, 128), model_family="mednext_v1",
-        variant="base", checkpointing="all-expansion",
+        phase="training",
+        device_type="cuda",
+        sm=sm,
+        total_vram_bytes=vram * 2**30,
+        dtype="bfloat16",
+        batch_size=batch,
+        spatial_shape=(128, 128, 128),
+        model_family="mednext_v1",
+        variant="base",
+        checkpointing="all-expansion",
         allow_approximate=approximate,
     )
 
@@ -51,9 +62,9 @@ def test_every_descriptor_gets_a_default_decision() -> None:
 
 
 def test_exact_sm_layer_is_not_applied_to_another_runtime_sm() -> None:
-    resolver = OptimizationResolver((
-        load_bundled_profile("sm120"), load_bundled_profile("generic-nvidia")
-    ))
+    resolver = OptimizationResolver(
+        (load_bundled_profile("sm120"), load_bundled_profile("generic-nvidia"))
+    )
     decision = resolver.resolve(
         pointwise_descriptor(), cuda_context(batch=3, sm=(9, 0)), "training"
     )
@@ -73,12 +84,19 @@ def test_non_export_safe_selection_is_guarded() -> None:
 
 def test_approximate_selection_requires_opt_in() -> None:
     descriptor = OperatorDescriptor(
-        family="gelu", direction="forward", in_channels=32, out_channels=32,
-        kernel_size=(1, 1, 1), stride=(1, 1, 1), padding=(0, 0, 0),
-        dilation=(1, 1, 1), groups=1,
+        family="gelu",
+        direction="forward",
+        in_channels=32,
+        out_channels=32,
+        kernel_size=(1, 1, 1),
+        stride=(1, 1, 1),
+        padding=(0, 0, 0),
+        dilation=(1, 1, 1),
+        groups=1,
     )
     resolver = OptimizationResolver((load_bundled_profile("sm120"),))
     assert resolver.resolve(descriptor, cuda_context(), "inference").implementation == "reference"
-    assert resolver.resolve(
-        descriptor, cuda_context(approximate=True), "inference"
-    ).implementation == "gelu_tanh"
+    assert (
+        resolver.resolve(descriptor, cuda_context(approximate=True), "inference").implementation
+        == "gelu_tanh"
+    )

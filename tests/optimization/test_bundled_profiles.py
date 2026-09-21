@@ -5,15 +5,30 @@ from mednext_accel.optimization.resolver import OptimizationResolver
 
 def pointwise_descriptor():
     return OperatorDescriptor(
-        "pointwise_conv3d", "regular", 32, 64, (1, 1, 1), (1, 1, 1),
-        (0, 0, 0), (1, 1, 1), 1,
+        "pointwise_conv3d",
+        "regular",
+        32,
+        64,
+        (1, 1, 1),
+        (1, 1, 1),
+        (0, 0, 0),
+        (1, 1, 1),
+        1,
     )
 
 
 def cuda_context(batch: int, spatial: int):
     return ExecutionContext(
-        "training", "cuda", (12, 0), 32 * 2**30, "bfloat16", batch,
-        (spatial,) * 3, "mednext_v1", "base", "all-expansion",
+        "training",
+        "cuda",
+        (12, 0),
+        32 * 2**30,
+        "bfloat16",
+        batch,
+        (spatial,) * 3,
+        "mednext_v1",
+        "base",
+        "all-expansion",
     )
 
 
@@ -33,5 +48,9 @@ def test_sm120_resolves_supported_batch_and_volume_grid() -> None:
             decision = resolver.resolve(pointwise_descriptor(), context, "training")
             assert decision.implementation in ("reference", "pointwise_gemm_per_sample")
             assert decision.confidence in {
-                "measured", "interpolated", "extrapolated", "default", "guard"
+                "measured",
+                "interpolated",
+                "extrapolated",
+                "default",
+                "guard",
             }

@@ -107,13 +107,20 @@ def profile_to_primitive(profile: OptimizationProfile) -> dict[str, object]:
 
     def rule(value: ProfileRule) -> dict[str, object]:
         match: dict[str, object] = {}
-        for name, item in (("batch", value.batch), ("spatial_volume", value.spatial_volume),
-                           ("total_vram_gib", value.total_vram_gib)):
+        for name, item in (
+            ("batch", value.batch),
+            ("spatial_volume", value.spatial_volume),
+            ("total_vram_gib", value.total_vram_gib),
+        ):
             primitive = _range_primitive(item)
             if primitive:
                 match[name] = primitive
         for name in (
-            "in_channels", "out_channels", "dtype", "model_family", "variant",
+            "in_channels",
+            "out_channels",
+            "dtype",
+            "model_family",
+            "variant",
             "checkpointing",
         ):
             item = getattr(value, name)
@@ -122,7 +129,9 @@ def profile_to_primitive(profile: OptimizationProfile) -> dict[str, object]:
         if value.spatial_shape is not None:
             match["spatial_shape"] = list(value.spatial_shape)
         result: dict[str, object] = {
-            "id": value.identifier, "family": value.family, "match": match,
+            "id": value.identifier,
+            "family": value.family,
+            "match": match,
             "phases": {phase: selection(item) for phase, item in value.phases.items()},
             "confidence": value.confidence,
         }
@@ -135,8 +144,11 @@ def profile_to_primitive(profile: OptimizationProfile) -> dict[str, object]:
         target["sm"] = list(profile.target_sm)
     return {
         "schema_version": profile.schema_version,
-        "profile": {"name": profile.name, "target": target,
-                    "provenance": _thaw(profile.provenance)},
+        "profile": {
+            "name": profile.name,
+            "target": target,
+            "provenance": _thaw(profile.provenance),
+        },
         "defaults": {
             family: {phase: selection(item) for phase, item in phases.items()}
             for family, phases in profile.defaults.items()
@@ -153,9 +165,7 @@ def _mapping(value: object, path: str) -> Mapping[str, object]:
     return value
 
 
-def _selection(
-    value: object, path: str, registry: ImplementationRegistry
-) -> ProfileSelection:
+def _selection(value: object, path: str, registry: ImplementationRegistry) -> ProfileSelection:
     data = _mapping(value, path)
     implementation = data.get("implementation")
     if not isinstance(implementation, str):
@@ -198,10 +208,12 @@ def _rule(
         raise ValueError(f"{path}.family must be a non-empty string")
     match = _mapping(data.get("match", {}), f"{path}.match")
     raw_phases = _mapping(data.get("phases"), f"{path}.phases")
-    phases = MappingProxyType({
-        phase: _selection(selection, f"{path}.phases.{phase}", registry)
-        for phase, selection in raw_phases.items()
-    })
+    phases = MappingProxyType(
+        {
+            phase: _selection(selection, f"{path}.phases.{phase}", registry)
+            for phase, selection in raw_phases.items()
+        }
+    )
     shape = match.get("spatial_shape")
     spatial_shape = None
     if shape is not None:
@@ -257,10 +269,12 @@ def parse_profile(
     defaults: dict[str, Mapping[str, ProfileSelection]] = {}
     for family, raw_phases in raw_defaults.items():
         phase_mapping = _mapping(raw_phases, f"defaults.{family}")
-        defaults[family] = MappingProxyType({
-            phase: _selection(selection, f"defaults.{family}.{phase}", registry)
-            for phase, selection in phase_mapping.items()
-        })
+        defaults[family] = MappingProxyType(
+            {
+                phase: _selection(selection, f"defaults.{family}.{phase}", registry)
+                for phase, selection in phase_mapping.items()
+            }
+        )
 
     rules = tuple(
         _rule(item, f"rules[{index}]", registry, override=False)

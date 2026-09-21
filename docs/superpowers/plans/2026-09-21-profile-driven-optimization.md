@@ -102,9 +102,7 @@ def test_descriptor_has_a_stable_primitive_identity() -> None:
     )
 
     assert descriptor.to_primitive()["family"] == "depthwise_conv3d"
-    assert descriptor.signature == (
-        "depthwise_conv3d", "regular", 32, 32, (3, 3, 3), (1, 1, 1)
-    )
+    assert descriptor.signature == ("depthwise_conv3d", "regular", 32, 32, (3, 3, 3), (1, 1, 1))
 
 
 def test_execution_context_records_runtime_resolution_inputs() -> None:
@@ -220,9 +218,7 @@ def test_registry_accepts_a_future_mednext_v2_operator_family() -> None:
         )
     )
 
-    assert registry.resolve_metadata("reference_grn").families == (
-        "global_response_norm",
-    )
+    assert registry.resolve_metadata("reference_grn").families == ("global_response_norm",)
 ```
 
 - [ ] **Step 5: Implement registry metadata and report types**
@@ -313,9 +309,7 @@ def test_profile_parses_json_compatible_mapping() -> None:
                 "provenance": {"gpu": "test", "torch": "test", "cuda": "test"},
             },
             "defaults": {
-                "pointwise_conv3d": {
-                    "training": {"implementation": "reference", "parameters": {}}
-                }
+                "pointwise_conv3d": {"training": {"implementation": "reference", "parameters": {}}}
             },
             "rules": [],
             "overrides": [],
@@ -483,8 +477,15 @@ Expected: import or file-not-found failures.
 Implement split formulas as schema data:
 
 ```python
-def scale_work(anchor_value: int, anchor_work: int, context_work: int, *, minimum: int,
-               maximum: int, multiple: int) -> int:
+def scale_work(
+    anchor_value: int,
+    anchor_work: int,
+    context_work: int,
+    *,
+    minimum: int,
+    maximum: int,
+    multiple: int,
+) -> int:
     raw = round(anchor_value * context_work / anchor_work)
     clamped = min(max(raw, minimum), maximum)
     return max(multiple, round(clamped / multiple) * multiple)
@@ -751,7 +752,10 @@ def test_default_campaign_covers_installed_models() -> None:
 
     assert campaign.preset == "all"
     assert {workload.variant for workload in campaign.workloads} == {
-        "small", "base", "medium", "large"
+        "small",
+        "base",
+        "medium",
+        "large",
     }
     assert campaign.batch_search.strategy == "auto"
     assert campaign.batch_search.memory_fraction == 0.90
@@ -760,7 +764,9 @@ def test_default_campaign_covers_installed_models() -> None:
 
 def test_minimal_yaml_uses_defaults(tmp_path: Path) -> None:
     path = tmp_path / "workload.yaml"
-    path.write_text("preset: mednext-v1\nworkloads:\n  - variant: base\n    spatial: [128, 128, 128]\n")
+    path.write_text(
+        "preset: mednext-v1\nworkloads:\n  - variant: base\n    spatial: [128, 128, 128]\n"
+    )
 
     campaign = load_campaign(path)
 

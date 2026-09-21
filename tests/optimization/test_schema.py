@@ -10,9 +10,7 @@ PROFILE = {
         "provenance": {"gpu": "test", "torch": "test", "cuda": "test"},
     },
     "defaults": {
-        "pointwise_conv3d": {
-            "training": {"implementation": "reference", "parameters": {}}
-        }
+        "pointwise_conv3d": {"training": {"implementation": "reference", "parameters": {}}}
     },
     "rules": [],
     "overrides": [],
@@ -32,16 +30,20 @@ def test_unknown_schema_version_is_rejected() -> None:
 
 
 def test_unknown_implementation_is_rejected_with_path() -> None:
-    mapping = {**PROFILE, "defaults": {
-        "pointwise_conv3d": {"training": {"implementation": "missing", "parameters": {}}}
-    }}
+    mapping = {
+        **PROFILE,
+        "defaults": {
+            "pointwise_conv3d": {"training": {"implementation": "missing", "parameters": {}}}
+        },
+    }
     with pytest.raises(ValueError, match="defaults.pointwise_conv3d.training.*missing"):
         parse_profile(mapping)
 
 
 def test_invalid_range_and_duplicate_rule_are_rejected() -> None:
     rule = {
-        "id": "r1", "family": "pointwise_conv3d",
+        "id": "r1",
+        "family": "pointwise_conv3d",
         "match": {"batch": {"min": 4, "max": 2}},
         "phases": {"training": {"implementation": "reference", "parameters": {}}},
     }

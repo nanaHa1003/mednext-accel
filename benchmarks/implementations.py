@@ -191,8 +191,10 @@ def main() -> None:
 
     execution = [
         {
-            "implementation": name, "optimization": optimization,
-            "checkpoint": "none", "compiled": compiled,
+            "implementation": name,
+            "optimization": optimization,
+            "checkpoint": "none",
+            "compiled": compiled,
         }
         for compiled in (False, True)
         for name, optimization in (

@@ -29,11 +29,15 @@ def main() -> None:
 
     if not torch.cuda.is_available():
         raise SystemExit("CUDA is required")
-    result = _invoke({
-        "kind": "pointwise", "batch": args.batch_size,
-        "in_channels": args.in_channels, "out_channels": args.out_channels,
-        "spatial_shape": args.spatial,
-    })
+    result = _invoke(
+        {
+            "kind": "pointwise",
+            "batch": args.batch_size,
+            "in_channels": args.in_channels,
+            "out_channels": args.out_channels,
+            "spatial_shape": args.spatial,
+        }
+    )
     if result.get("status") != "ok":
         raise SystemExit(result.get("message", result["status"]))
     native_ms = float(result["reference_ms"])

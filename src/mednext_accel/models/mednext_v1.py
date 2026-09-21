@@ -258,15 +258,12 @@ class MedNeXtV1(nn.Module):
         for module in self.modules():
             module_context = replace(
                 context,
-                spatial_shape=_spatial_shape_for_role(
-                    module.descriptor.role, context.spatial_shape
-                ) if isinstance(module, (AdaptivePointwise3d, AdaptiveDepthwise3d))
+                spatial_shape=_spatial_shape_for_role(module.descriptor.role, context.spatial_shape)
+                if isinstance(module, (AdaptivePointwise3d, AdaptiveDepthwise3d))
                 else context.spatial_shape,
             )
             if isinstance(module, AdaptivePointwise3d):
-                decisions.append(
-                    resolver.resolve(module.descriptor, module_context, context.phase)
-                )
+                decisions.append(resolver.resolve(module.descriptor, module_context, context.phase))
             elif isinstance(module, AdaptiveDepthwise3d):
                 decisions.extend(
                     resolver.resolve(module.descriptor, module_context, phase)
@@ -351,9 +348,7 @@ def _factory(
     return _configure_optimization(model, optimization)
 
 
-def _configure_optimization(
-    model: MedNeXtV1, optimization: OptimizationSource
-) -> MedNeXtV1:
+def _configure_optimization(model: MedNeXtV1, optimization: OptimizationSource) -> MedNeXtV1:
     model.optimization_source = optimization
     if optimization == "reference":
         return model
@@ -362,9 +357,7 @@ def _configure_optimization(
         "conservative",
         "autotune",
     ):
-        raise ValueError(
-            f"optimization={optimization!r} was removed; use 'auto' or 'reference'"
-        )
+        raise ValueError(f"optimization={optimization!r} was removed; use 'auto' or 'reference'")
     external = None if optimization == "auto" else optimization
     sm = torch.cuda.get_device_capability() if torch.cuda.is_available() else None
     resolver = ProfileRegistry(external=external).resolver_for(sm=sm)

@@ -18,7 +18,8 @@ def test_auto_search_is_dense_then_refines_to_vram_limit() -> None:
 
 def test_batch_one_oom_is_a_complete_result() -> None:
     result = search_batches(
-        BatchSearch(), total_vram_bytes=100,
+        BatchSearch(),
+        total_vram_bytes=100,
         probe=lambda batch: ProbeResult(batch, False, 200, "oom"),
     )
     assert result.maximum_feasible == 0
@@ -27,7 +28,8 @@ def test_batch_one_oom_is_a_complete_result() -> None:
 
 def test_memory_headroom_can_reject_an_otherwise_successful_probe() -> None:
     result = search_batches(
-        BatchSearch(maximum=3, memory_fraction=0.9), total_vram_bytes=1000,
+        BatchSearch(maximum=3, memory_fraction=0.9),
+        total_vram_bytes=1000,
         probe=lambda batch: ProbeResult(batch, True, batch * 400),
     )
     assert result.maximum_feasible == 2

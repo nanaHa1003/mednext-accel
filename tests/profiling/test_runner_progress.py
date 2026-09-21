@@ -38,15 +38,15 @@ class _Recorder:
         pass
 
 
-def test_runner_reports_workload_and_counted_operator_validation(
-    monkeypatch, capsys
-) -> None:
+def test_runner_reports_workload_and_counted_operator_validation(monkeypatch, capsys) -> None:
     workload = Workload("mednext_v1", "base", (128, 128, 128))
     campaign = Campaign("mednext-v1", (workload,), BatchSearch(maximum=1))
     reporter = _Recorder()
-    monkeypatch.setattr(runner, "_batches", lambda *args, **kwargs: (
-        (1,), {1: {"status": "ok", "step_ms": 10.0, "peak_bytes": 100}}
-    ))
+    monkeypatch.setattr(
+        runner,
+        "_batches",
+        lambda *args, **kwargs: ((1,), {1: {"status": "ok", "step_ms": 10.0, "peak_bytes": 100}}),
+    )
     monkeypatch.setattr(runner, "_pointwise_shapes", lambda workload: ())
     monkeypatch.setattr(runner, "_depthwise_shapes", lambda workload: ())
     monkeypatch.setattr(

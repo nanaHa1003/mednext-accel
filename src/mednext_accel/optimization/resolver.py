@@ -99,19 +99,34 @@ class OptimizationResolver:
                     selection = rule.phases.get(phase)
                     if selection is not None and _matches(rule, descriptor, context):
                         return self._decision(
-                            profile, rule.identifier, rule.confidence,
-                            descriptor, context, phase, selection,
+                            profile,
+                            rule.identifier,
+                            rule.confidence,
+                            descriptor,
+                            context,
+                            phase,
+                            selection,
                         )
             phases = profile.defaults.get(descriptor.family)
             if phases is not None and phase in phases:
                 return self._decision(
-                    profile, f"default:{descriptor.family}", "default",
-                    descriptor, context, phase, phases[phase],
+                    profile,
+                    f"default:{descriptor.family}",
+                    "default",
+                    descriptor,
+                    context,
+                    phase,
+                    phases[phase],
                 )
         return Decision(
-            descriptor=descriptor, phase=phase, implementation="reference",
-            parameters={}, profile=self.profiles[-1].name, rule="correctness-guard",
-            confidence="guard", warning=self.warning,
+            descriptor=descriptor,
+            phase=phase,
+            implementation="reference",
+            parameters={},
+            profile=self.profiles[-1].name,
+            rule="correctness-guard",
+            confidence="guard",
+            warning=self.warning,
         )
 
     def _decision(
@@ -127,23 +142,34 @@ class OptimizationResolver:
         spec = self.registry.resolve_metadata(selection.implementation)
         family_allowed = "*" in spec.families or descriptor.family in spec.families
         phase_allowed = phase in spec.phases
-        allowed = family_allowed and phase_allowed and spec.is_allowed(
-            allow_approximate=context.allow_approximate,
-            export=context.export or phase == "export",
+        allowed = (
+            family_allowed
+            and phase_allowed
+            and spec.is_allowed(
+                allow_approximate=context.allow_approximate,
+                export=context.export or phase == "export",
+            )
         )
         if not allowed:
             return Decision(
-                descriptor=descriptor, phase=phase, implementation="reference",
-                parameters={}, profile=profile.name, rule=f"guard:{rule}",
-                confidence="guard", warning=self.warning,
+                descriptor=descriptor,
+                phase=phase,
+                implementation="reference",
+                parameters={},
+                profile=profile.name,
+                rule=f"guard:{rule}",
+                confidence="guard",
+                warning=self.warning,
             )
-        parameters = {
-            key: _evaluate(value, context) for key, value in selection.parameters.items()
-        }
+        parameters = {key: _evaluate(value, context) for key, value in selection.parameters.items()}
         return Decision(
-            descriptor=descriptor, phase=phase,
-            implementation=selection.implementation, parameters=parameters,
-            profile=profile.name, rule=rule, confidence=confidence,  # type: ignore[arg-type]
+            descriptor=descriptor,
+            phase=phase,
+            implementation=selection.implementation,
+            parameters=parameters,
+            profile=profile.name,
+            rule=rule,
+            confidence=confidence,  # type: ignore[arg-type]
             warning=self.warning,
         )
 

@@ -101,30 +101,36 @@ def profile(
     )
     planned_output = default_profile_path(planned_profile)
     if progress is not None:
-        progress.emit(ProgressEvent(
-            "environment", "environment",
-            message=(
-                f"{gpu['name']} · SM{gpu['sm'][0]}{gpu['sm'][1]} · "
-                f"{int(gpu['total_memory_bytes']) / 1024**3:.1f} GiB · "
-                f"driver {environment['driver']} · Python {environment['python']} · "
-                f"mednext-accel {software['mednext_accel']} · "
-                f"PyTorch {software['torch']} · CUDA {software['cuda']} · "
-                f"cuDNN {software['cudnn']} · Triton {software['triton']} · "
-                f"objective {campaign.objective} · compile {campaign.compile_mode}"
-            ),
-        ))
-        progress.emit(ProgressEvent(
-            "status", "output", message=f"profile will be written to {planned_output}"
-        ))
+        progress.emit(
+            ProgressEvent(
+                "environment",
+                "environment",
+                message=(
+                    f"{gpu['name']} · SM{gpu['sm'][0]}{gpu['sm'][1]} · "
+                    f"{int(gpu['total_memory_bytes']) / 1024**3:.1f} GiB · "
+                    f"driver {environment['driver']} · Python {environment['python']} · "
+                    f"mednext-accel {software['mednext_accel']} · "
+                    f"PyTorch {software['torch']} · CUDA {software['cuda']} · "
+                    f"cuDNN {software['cudnn']} · Triton {software['triton']} · "
+                    f"objective {campaign.objective} · compile {campaign.compile_mode}"
+                ),
+            )
+        )
+        progress.emit(
+            ProgressEvent(
+                "status", "output", message=f"profile will be written to {planned_output}"
+            )
+        )
     measurements = run_campaign(campaign, progress=progress)
     generated = synthesize_campaign(campaign, measurements, environment=environment)
-    result = ProfilingResult(
-        generated, measurements, planned_output, environment
-    )
+    result = ProfilingResult(generated, measurements, planned_output, environment)
     result.save()
     if progress is not None:
-        progress.emit(ProgressEvent(
-            "complete", "campaign",
-            message=f"saved {len(measurements)} measurements to {result.output_path}",
-        ))
+        progress.emit(
+            ProgressEvent(
+                "complete",
+                "campaign",
+                message=f"saved {len(measurements)} measurements to {result.output_path}",
+            )
+        )
     return result

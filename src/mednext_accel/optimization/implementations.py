@@ -89,8 +89,14 @@ def default_implementation_registry() -> ImplementationRegistry:
         ("gelu_tanh", ("gelu",), ("inference",), "approximate", True),
     )
     for identifier, families, phases, equivalence, export_safe in definitions:
-        registry.register(ImplementationSpec(
-            identifier=identifier, version=1, families=families, phases=phases,
-            equivalence=equivalence, export_safe=export_safe,
-        ))
+        registry.register(
+            ImplementationSpec(
+                identifier=identifier,
+                version=1,
+                families=families,
+                phases=phases,
+                equivalence=equivalence,
+                export_safe=export_safe,
+            )
+        )
     return registry

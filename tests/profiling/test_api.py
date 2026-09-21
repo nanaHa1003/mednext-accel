@@ -33,12 +33,16 @@ def test_profile_reports_the_complete_environment_summary(monkeypatch, tmp_path)
         "platform": "Linux-6.8-x86_64",
         "driver": "580.65.06",
         "gpu": {
-            "name": "NVIDIA L40S", "sm": [8, 9],
+            "name": "NVIDIA L40S",
+            "sm": [8, 9],
             "total_memory_bytes": 48 * 1024**3,
         },
         "software": {
-            "mednext_accel": "0.1.0a0", "torch": "2.9.0", "cuda": "12.8",
-            "cudnn": 90100, "triton": "3.5.0",
+            "mednext_accel": "0.1.0a0",
+            "torch": "2.9.0",
+            "cuda": "12.8",
+            "cudnn": 90100,
+            "triton": "3.5.0",
         },
     }
 
@@ -56,7 +60,8 @@ def test_profile_reports_the_complete_environment_summary(monkeypatch, tmp_path)
     monkeypatch.setattr(api, "collect_environment", lambda: environment)
     monkeypatch.setattr(api, "run_campaign", lambda campaign, progress=None: ())
     monkeypatch.setattr(
-        api, "synthesize_campaign",
+        api,
+        "synthesize_campaign",
         lambda campaign, values, environment=None: generated,
     )
     monkeypatch.setattr(api, "default_profile_path", lambda profile: tmp_path / "profile.json")
@@ -65,9 +70,18 @@ def test_profile_reports_the_complete_environment_summary(monkeypatch, tmp_path)
 
     summary = reporter.events[0].message
     for value in (
-        "NVIDIA L40S", "SM89", "48.0 GiB", "driver 580.65.06", "Python 3.11.13",
-        "mednext-accel 0.1.0a0", "PyTorch 2.9.0", "CUDA 12.8", "cuDNN 90100",
-        "Triton 3.5.0", "objective balanced", "compile max-autotune-no-cudagraphs",
+        "NVIDIA L40S",
+        "SM89",
+        "48.0 GiB",
+        "driver 580.65.06",
+        "Python 3.11.13",
+        "mednext-accel 0.1.0a0",
+        "PyTorch 2.9.0",
+        "CUDA 12.8",
+        "cuDNN 90100",
+        "Triton 3.5.0",
+        "objective balanced",
+        "compile max-autotune-no-cudagraphs",
     ):
         assert value in summary
     assert reporter.events[1].stage == "output"

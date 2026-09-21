@@ -190,8 +190,13 @@ class AdaptiveDepthwise3d(nn.Module):
         self.weight = conv.weight
         self.bias = conv.bias
         for name in (
-            "in_channels", "out_channels", "kernel_size", "stride", "padding",
-            "dilation", "groups",
+            "in_channels",
+            "out_channels",
+            "kernel_size",
+            "stride",
+            "padding",
+            "dilation",
+            "groups",
         ):
             setattr(self, name, getattr(conv, name))
         self.output_padding = getattr(conv, "output_padding", (0, 0, 0))
@@ -204,12 +209,23 @@ class AdaptiveDepthwise3d(nn.Module):
     def _reference(self, x: Tensor) -> Tensor:
         if self.transpose:
             return F.conv_transpose3d(
-                x, self.weight, self.bias, self.stride, self.padding,
-                self.output_padding, self.groups, self.dilation,
+                x,
+                self.weight,
+                self.bias,
+                self.stride,
+                self.padding,
+                self.output_padding,
+                self.groups,
+                self.dilation,
             )
         return F.conv3d(
-            x, self.weight, self.bias, self.stride, self.padding,
-            self.dilation, self.groups,
+            x,
+            self.weight,
+            self.bias,
+            self.stride,
+            self.padding,
+            self.dilation,
+            self.groups,
         )
 
     def forward(self, x: Tensor) -> Tensor:
@@ -236,13 +252,23 @@ class AdaptiveDepthwise3d(nn.Module):
         kernel = self.kernel_size[0]
         if self.transpose and dw.implementation == "triton_transpose_split_dw":
             return backend.depthwise_conv_transpose3d_regular(
-                x, weight, bias, kernel, self.in_channels, size,
+                x,
+                weight,
+                bias,
+                kernel,
+                self.in_channels,
+                size,
                 int(dw.parameters.get("dw_splits", 8)),
                 int(dw.parameters.get("dw_block", 256)),
             )
         if self.stride == (2, 2, 2) and dx.implementation == "triton_downsample_dx":
             return backend.depthwise_conv3d_stride2_regular(
-                x, weight, bias, kernel, self.in_channels, size,
+                x,
+                weight,
+                bias,
+                kernel,
+                self.in_channels,
+                size,
                 int(dx.parameters.get("dx_block", 128)),
             )
         if (
@@ -251,7 +277,12 @@ class AdaptiveDepthwise3d(nn.Module):
             and dw.implementation == "triton_split_dw"
         ):
             return backend.depthwise_conv3d_regular(
-                x, weight, bias, kernel, self.in_channels, size,
+                x,
+                weight,
+                bias,
+                kernel,
+                self.in_channels,
+                size,
                 int(dw.parameters.get("dw_splits", 8)),
                 int(dw.parameters.get("dw_block", 256)),
                 int(dx.parameters.get("dx_block", 256)),

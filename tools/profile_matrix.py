@@ -56,7 +56,10 @@ def main() -> None:
     worker = Path(__file__).with_name("profile_train_step.py")
     runs = []
     combinations = itertools.product(
-        args.classes, args.dtypes, args.optimizations, args.compile_modes,
+        args.classes,
+        args.dtypes,
+        args.optimizations,
+        args.compile_modes,
         range(1, args.repeats + 1),
     )
     for classes, dtype, optimization, compile_mode, repeat in combinations:
