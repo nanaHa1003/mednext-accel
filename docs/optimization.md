@@ -45,20 +45,51 @@ mednext-accel profile
 ```
 
 It detects GPU architecture and VRAM, profiles installed MedNeXt v1 variants,
-and writes one profile to `~/.cache/mednext_accel/profiles/`. Each memory probe
-and kernel benchmark runs in a separate process, so CUDA OOM does not poison the
-campaign. Batch search tests every integer through eight when feasible, expands
-by powers of two, then uses binary refinement at the memory boundary.
+and writes one profile to `~/.cache/mednext_accel/profiles/`. CUDA work runs in
+child processes, so an OOM does not poison the campaign. Batch search tests
+every integer through eight when feasible, expands by powers of two, then uses
+binary refinement at the memory boundary.
 
 Interactive terminals show a Rich progress display. Redirected output and
 `tee` automatically use stable plain-text lines. Override the selection with
 `--progress auto`, `--progress plain`, or `--progress quiet`. Batch search shows
-elapsed time while its total is still unknown; after feasible batches are known,
-operator profiling shows completed/total work and ETA.
+elapsed time while its total is still unknown. It remains specific to model
+variant, spatial shape, channels, checkpoint context, and compile mode because
+those inputs affect whole-model memory and step time; its probes are therefore
+not globally deduplicated.
+
+Once feasible batches are known, the fixed-size kernel and validation phases
+show completed/total work and ETA. A compact representative display is:
+
+```text
+kernel plan: 20 planned groups, 192 unique experiments, 576 requested references
+Kernel groups 20/20 · experiments 192/192
+validation plan: 2 whole-model validations
+Validation 2/2
+```
+
+These numbers illustrate the display rather than report a benchmark. An
+`experiment` is one unique logical kernel case, identified by the operator,
+phase, batch, tensor shape, dtype, candidate, and launch parameters. Each use by
+a workload and checkpoint context is one requested reference, so the same
+experiment may satisfy several references without being timed again.
+`Groups` count actual child-process attempts. If a child fails, the profiler
+bisects its cases and retries both halves, so the group total and final count can
+grow beyond the original plan.
+
+Shared kernel results are projected back into each workload before synthesis.
+Consecutive batches with the same complete operator decisions form a segment;
+whole-model validation probes only the first and last batch of each segment.
+Those checks remain context-specific, so a result from one model or checkpoint
+configuration is never used to validate another.
 
 The generated profile records the GPU name, SM, VRAM, NVIDIA driver, platform,
 Python, mednext-accel, PyTorch, CUDA, cuDNN, Triton, objective, and compile mode
-under `profile.provenance`. It omits hostnames and usernames.
+under `profile.provenance`. Its `execution` object records unique kernel cases,
+actual child attempts (including bisection retries), actual whole-model endpoint
+probes, and the requested references removed by kernel deduplication. It omits
+hostnames and usernames. Profiles without `execution` remain valid schema-v1
+documents.
 
 A minimal campaign can narrow the workload:
 

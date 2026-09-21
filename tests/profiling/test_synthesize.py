@@ -54,6 +54,24 @@ def test_reported_winner_uses_the_same_balanced_threshold_as_synthesis() -> None
     assert candidate_wins(measured(2, 100.0, 96.0), "balanced")
 
 
+def test_synthesize_profile_records_deduplicated_execution_counts() -> None:
+    execution = {
+        "kernel_case_count": 192,
+        "kernel_group_count": 20,
+        "whole_model_validation_count": 2,
+        "deduplicated_reference_count": 384,
+    }
+    profile = synthesize_profile(
+        (),
+        name="sm89-local",
+        sm=(8, 9),
+        objective="balanced",
+        execution=execution,
+    )
+
+    assert profile.provenance["execution"] == execution
+
+
 def test_raw_result_materialization_restores_context_and_uses_planned_identity():
     from mednext_accel.profiling import synthesize
     from mednext_accel.profiling.matrix import KernelCase, KernelCaseKey

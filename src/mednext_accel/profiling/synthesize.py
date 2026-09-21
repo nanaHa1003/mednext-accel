@@ -114,6 +114,7 @@ def synthesize_profile(
     objective: Objective,
     environment: dict[str, object] | None = None,
     compile_mode: str | None = None,
+    execution: Mapping[str, int] | None = None,
 ) -> OptimizationProfile:
     winners = sorted(
         (item for item in measurements if candidate_wins(item, objective)),
@@ -200,6 +201,7 @@ def synthesize_profile(
                     "measurement_count": len(measurements),
                     **({"environment": environment} if environment is not None else {}),
                     **({"compile_mode": compile_mode} if compile_mode is not None else {}),
+                    **({"execution": dict(execution)} if execution is not None else {}),
                 },
             },
             "defaults": _defaults(),

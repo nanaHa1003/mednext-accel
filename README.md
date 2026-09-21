@@ -200,11 +200,30 @@ mednext-accel profile
 
 The profiler detects the GPU and VRAM, expands small batches densely, searches
 for the largest feasible batch with isolated subprocesses, validates candidate
-forward/backward results, and writes one merged profile. It reports batch-search
-status followed by operator progress, elapsed time, and ETA. Hardware, driver,
-Python, PyTorch, CUDA, cuDNN, and Triton versions are embedded in the generated
-profile. A small YAML campaign can restrict variants or input shapes. Model
-construction and first forward never run these benchmarks.
+forward/backward results, and writes one merged profile. After batch search, a
+representative two-phase display looks like this (the counts are illustrative):
+
+```text
+kernel plan: 20 planned groups, 192 unique experiments, 576 requested references
+Kernel groups 20/20 · experiments 192/192
+validation plan: 2 whole-model validations
+Validation 2/2
+```
+
+An experiment is one unique kernel case. Requested references include repeated
+uses of that case across model and checkpoint contexts, so the kernel is timed
+once and its result is reused. Groups are child-process attempts; a failed group
+is bisected for isolation, which can increase the displayed total and the final
+group count. Whole-model checks remain specific to each context and run only at
+the boundaries of consecutive batches with the same decisions. Batch search is
+also context-specific because checkpointing and model shape affect memory, so
+its probes are not globally deduplicated.
+
+The profiler reports elapsed time and ETA for each fixed-size phase. Hardware,
+driver, Python, PyTorch, CUDA, cuDNN, and Triton versions, along with the final
+execution counts, are embedded in the generated profile. A small YAML campaign
+can restrict variants or input shapes. Model construction and first forward
+never run these benchmarks.
 
 Use `fullgraph=True` when the complete training graph is supported. On RTX 5090,
 `mode="default"` is a good general choice, while

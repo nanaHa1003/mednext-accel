@@ -3,26 +3,66 @@ import json
 from mednext_accel.optimization.schema import OptimizationProfile
 from mednext_accel.profiling import api
 from mednext_accel.profiling.campaign import load_campaign
-from mednext_accel.profiling.synthesize import synthesize_profile
+from mednext_accel.profiling.runner import CampaignRun, ExecutionStatistics
+from mednext_accel.profiling.synthesize import Measurement, synthesize_profile
 
 
-def test_profile_saves_one_atomic_result(monkeypatch, tmp_path) -> None:
-    generated = synthesize_profile([], name="sm120-local", sm=(12, 0), objective="balanced")
+def measured() -> Measurement:
+    return Measurement(
+        family="pointwise_conv3d",
+        direction="regular",
+        phase="training",
+        implementation="pointwise_gemm_per_sample",
+        batch=1,
+        spatial_shape=(32, 32, 32),
+        in_channels=4,
+        out_channels=8,
+        dtype="bfloat16",
+        checkpointing="none",
+        reference_ms=2.0,
+        candidate_ms=1.0,
+        reference_peak_bytes=200,
+        candidate_peak_bytes=100,
+        valid=True,
+    )
+
+
+def test_profile_saves_measurements_environment_and_execution_atomically(
+    monkeypatch, tmp_path
+) -> None:
     environment = {
         "gpu": {"name": "NVIDIA RTX 5090", "sm": [12, 0]},
         "software": {"torch": "2.9"},
     }
-    monkeypatch.setattr(api, "collect_environment", lambda: environment)
-    monkeypatch.setattr(api, "run_campaign", lambda campaign, progress=None: ())
-    monkeypatch.setattr(
-        api,
-        "synthesize_campaign",
-        lambda campaign, values, environment=None: generated,
+    campaign_run = CampaignRun(
+        measurements=(measured(),),
+        statistics=ExecutionStatistics(
+            requested_case_count=576,
+            kernel_case_count=192,
+            kernel_group_count=20,
+            whole_model_validation_count=2,
+        ),
     )
+    monkeypatch.setattr(api, "collect_environment", lambda: environment)
+    monkeypatch.setattr(api, "execute_campaign", lambda campaign, progress=None: campaign_run)
+    monkeypatch.setattr(api.torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(api.torch.cuda, "get_device_capability", lambda: (12, 0))
     monkeypatch.setattr(api, "default_profile_path", lambda profile: tmp_path / "profile.json")
+
     result = api.profile(load_campaign(None))
+
     assert result.output_path.exists()
-    assert json.loads(result.output_path.read_text())["profile"]["name"] == "sm120-local"
+    saved = json.loads(result.output_path.read_text())
+    assert saved["profile"]["name"] == "sm120-local"
+    assert saved["profile"]["provenance"]["environment"] == environment
+    assert saved["profile"]["provenance"]["execution"] == {
+        "kernel_case_count": 192,
+        "kernel_group_count": 20,
+        "whole_model_validation_count": 2,
+        "deduplicated_reference_count": 384,
+    }
+    assert saved["measurements"][0]["family"] == "pointwise_conv3d"
+    assert result.measurements == campaign_run.measurements
     assert result.environment == environment
 
 
@@ -58,11 +98,15 @@ def test_profile_reports_the_complete_environment_summary(monkeypatch, tmp_path)
 
     reporter = Reporter()
     monkeypatch.setattr(api, "collect_environment", lambda: environment)
-    monkeypatch.setattr(api, "run_campaign", lambda campaign, progress=None: ())
+    monkeypatch.setattr(
+        api,
+        "execute_campaign",
+        lambda campaign, progress=None: CampaignRun((), ExecutionStatistics(0, 0, 0, 0)),
+    )
     monkeypatch.setattr(
         api,
         "synthesize_campaign",
-        lambda campaign, values, environment=None: generated,
+        lambda campaign, values, environment=None, execution=None: generated,
     )
     monkeypatch.setattr(api, "default_profile_path", lambda profile: tmp_path / "profile.json")
 
@@ -106,3 +150,22 @@ def test_profiling_result_preserves_three_argument_constructor(tmp_path) -> None
     result = api.ProfilingResult(generated, (), tmp_path / "profile.json")
 
     assert result.environment == {}
+
+
+def test_public_run_campaign_remains_tuple_compatible(monkeypatch) -> None:
+    campaign = load_campaign(None)
+    campaign_run = CampaignRun(
+        (measured(),),
+        ExecutionStatistics(
+            requested_case_count=3,
+            kernel_case_count=2,
+            kernel_group_count=1,
+            whole_model_validation_count=0,
+        ),
+    )
+    monkeypatch.setattr(api, "execute_campaign", lambda value, progress=None: campaign_run)
+
+    measurements = api.run_campaign(campaign)
+
+    assert measurements == campaign_run.measurements
+    assert isinstance(measurements, tuple)

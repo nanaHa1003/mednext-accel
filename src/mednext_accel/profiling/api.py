@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from os import PathLike
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import torch
 
@@ -17,21 +19,30 @@ from .environment import collect_environment
 from .progress import ProgressEvent, ProgressReporter
 from .synthesize import Measurement, synthesize_profile
 
+if TYPE_CHECKING:
+    from .runner import CampaignRun
+
+
+def execute_campaign(campaign: Campaign, progress: ProgressReporter | None = None) -> CampaignRun:
+    """Execute a campaign; imported lazily to keep CLI discovery GPU-free."""
+
+    from .runner import execute_campaign as execute
+
+    return execute(campaign, progress=progress)
+
 
 def run_campaign(
     campaign: Campaign, progress: ProgressReporter | None = None
 ) -> tuple[Measurement, ...]:
-    """Execute a campaign; imported lazily to keep CLI discovery GPU-free."""
-
-    from .runner import run_campaign as execute
-
-    return execute(campaign, progress=progress)
+    """Return measurements for callers using the original public API."""
+    return execute_campaign(campaign, progress=progress).measurements
 
 
 def synthesize_campaign(
     campaign: Campaign,
     measurements: tuple[Measurement, ...],
     environment: dict[str, object] | None = None,
+    execution: Mapping[str, int] | None = None,
 ) -> OptimizationProfile:
     if not torch.cuda.is_available():
         raise RuntimeError("profiling requires an NVIDIA CUDA device")
@@ -43,6 +54,7 @@ def synthesize_campaign(
         objective=campaign.objective,
         environment=environment,
         compile_mode=campaign.compile_mode,
+        execution=execution,
     )
 
 
@@ -121,8 +133,22 @@ def profile(
                 "status", "output", message=f"profile will be written to {planned_output}"
             )
         )
-    measurements = run_campaign(campaign, progress=progress)
-    generated = synthesize_campaign(campaign, measurements, environment=environment)
+    campaign_run = execute_campaign(campaign, progress=progress)
+    measurements = campaign_run.measurements
+    statistics = campaign_run.statistics
+    execution = {
+        "kernel_case_count": statistics.kernel_case_count,
+        "kernel_group_count": statistics.kernel_group_count,
+        "whole_model_validation_count": statistics.whole_model_validation_count,
+        "deduplicated_reference_count": statistics.requested_case_count
+        - statistics.kernel_case_count,
+    }
+    generated = synthesize_campaign(
+        campaign,
+        measurements,
+        environment=environment,
+        execution=execution,
+    )
     result = ProfilingResult(generated, measurements, planned_output, environment)
     result.save()
     if progress is not None:
