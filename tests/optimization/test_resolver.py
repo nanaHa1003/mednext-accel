@@ -50,6 +50,16 @@ def test_every_descriptor_gets_a_default_decision() -> None:
     assert resolver.resolve(descriptor, cuda_context(batch=17), "training").implementation
 
 
+def test_exact_sm_layer_is_not_applied_to_another_runtime_sm() -> None:
+    resolver = OptimizationResolver((
+        load_bundled_profile("sm120"), load_bundled_profile("generic-nvidia")
+    ))
+    decision = resolver.resolve(
+        pointwise_descriptor(), cuda_context(batch=3, sm=(9, 0)), "training"
+    )
+    assert decision.profile == "generic-nvidia"
+
+
 def test_scale_work_clamps_and_rounds_to_multiple() -> None:
     assert scale_work(8, 100, 200, minimum=4, maximum=12, multiple=4) == 12
 

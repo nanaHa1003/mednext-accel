@@ -80,4 +80,8 @@ class ProfileRegistry:
         layers.append(load_bundled_profile(bundled_name))
         if bundled_name != "generic-nvidia":
             layers.append(load_bundled_profile("generic-nvidia"))
-        return OptimizationResolver(layers, warning=warning)
+        return OptimizationResolver(
+            layers,
+            warning=warning,
+            target_agnostic_profiles=1 if self.external is not None else 0,
+        )

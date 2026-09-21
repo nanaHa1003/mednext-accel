@@ -71,7 +71,6 @@ def main() -> None:
     )
 
     from mednext_accel import CheckpointConfig, mednext_base
-    from mednext_accel.optimization import optimize
 
     expansion = [2, 3, 4, 4, 4, 4, 4, 3, 2]
 
@@ -124,16 +123,10 @@ def main() -> None:
                 kernel_size=3,
                 deep_supervision=True,
                 checkpointing=checkpointing,
+                optimization=config["optimization"],
             )
             .cuda()
             .train()
-        )
-        optimize(
-            model,
-            input_shape=(1, 1, 128, 128, 128),
-            dtype=torch.bfloat16,
-            policy=config["policy"],
-            compile_mode=args.compile_mode,
         )
         return model
 
@@ -197,26 +190,29 @@ def main() -> None:
         return result
 
     execution = [
-        {"implementation": name, "policy": policy, "checkpoint": "none", "compiled": compiled}
+        {
+            "implementation": name, "optimization": optimization,
+            "checkpoint": "none", "compiled": compiled,
+        }
         for compiled in (False, True)
-        for name, policy in (
+        for name, optimization in (
             ("official", "native"),
             ("monai", "native"),
-            ("mednext-accel", "torch"),
-            ("mednext-accel", "conservative"),
+            ("mednext-accel", "reference"),
+            ("mednext-accel", "auto"),
         )
     ]
     checkpoint = [
         {
             "implementation": "official",
-            "policy": "native",
+            "optimization": "native",
             "checkpoint": "whole-block",
             "compiled": True,
         },
         *[
             {
                 "implementation": "mednext-accel",
-                "policy": "conservative",
+                "optimization": "auto",
                 "checkpoint": selection,
                 "compiled": True,
             }

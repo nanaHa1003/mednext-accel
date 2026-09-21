@@ -24,7 +24,7 @@ def parse_args() -> argparse.Namespace:
         default="default",
     )
     parser.add_argument(
-        "--policy", choices=("torch", "conservative", "autotune"), default="conservative"
+        "--optimization", choices=("auto", "reference"), default="auto"
     )
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument("--steps", type=int, default=20)
@@ -61,7 +61,6 @@ def measure(args: argparse.Namespace) -> dict[str, Any]:
     from torch.nn import functional as F
 
     from mednext_accel import mednext_base
-    from mednext_accel.optimization import optimize
 
     if not torch.cuda.is_available():
         raise SystemExit("CUDA is required")
@@ -77,16 +76,10 @@ def measure(args: argparse.Namespace) -> dict[str, Any]:
             kernel_size=3,
             deep_supervision=True,
             checkpointing=_checkpoint_config(args.checkpoint),
+            optimization=args.optimization,
         )
         .cuda()
         .train()
-    )
-    report = optimize(
-        model,
-        input_shape=shape,
-        dtype=torch.bfloat16,
-        policy=args.policy,
-        compile_mode=args.compile_mode,
     )
     model.compile(mode=args.compile_mode, fullgraph=True)
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
@@ -156,9 +149,7 @@ def measure(args: argparse.Namespace) -> dict[str, Any]:
         "torch": torch.__version__,
         "cuda": torch.version.cuda,
         "compile_mode": args.compile_mode,
-        "optimization_policy": args.policy,
-        "optimized_replacements": report.replacements,
-        "optimization_notes": report.notes,
+        "optimization": args.optimization,
         "fullgraph": True,
     }
 
@@ -173,7 +164,7 @@ def sweep(args: argparse.Namespace) -> None:
     payload: dict[str, Any] = {
         "workload": "MedNeXt Base 128^3, BF16, 3 classes, deep supervision, AdamW",
         "compile_mode": args.compile_mode,
-        "optimization_policy": args.policy,
+        "optimization": args.optimization,
         "fullgraph": True,
         "warmup": args.warmup,
         "steps": args.steps,
@@ -191,8 +182,8 @@ def sweep(args: argparse.Namespace) -> None:
                 str(batch_size),
                 "--compile-mode",
                 args.compile_mode,
-                "--policy",
-                args.policy,
+                "--optimization",
+                args.optimization,
                 "--warmup",
                 str(args.warmup),
                 "--steps",

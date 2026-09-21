@@ -72,12 +72,14 @@ class OptimizationResolver:
         *,
         registry: ImplementationRegistry | None = None,
         warning: str | None = None,
+        target_agnostic_profiles: int = 0,
     ) -> None:
         if not profiles:
             raise ValueError("at least one optimization profile is required")
         self.profiles = tuple(profiles)
         self.registry = registry or default_implementation_registry()
         self.warning = warning
+        self.target_agnostic_profiles = target_agnostic_profiles
 
     def resolve(
         self,
@@ -85,7 +87,13 @@ class OptimizationResolver:
         context: ExecutionContext,
         phase: str,
     ) -> Decision:
-        for profile in self.profiles:
+        for profile_index, profile in enumerate(self.profiles):
+            if (
+                profile_index >= self.target_agnostic_profiles
+                and profile.target_sm is not None
+                and profile.target_sm != context.sm
+            ):
+                continue
             for rules in (profile.overrides, profile.rules):
                 for rule in rules:
                     selection = rule.phases.get(phase)

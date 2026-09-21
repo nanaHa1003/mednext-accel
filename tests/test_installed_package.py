@@ -38,6 +38,12 @@ model = mednext_accel.mednext_small(in_channels=1, out_channels=3).eval()
 with torch.no_grad():
     output = model(torch.randn(1, 1, 32, 32, 32))
 assert output.shape == (1, 3, 32, 32, 32)
+report = model.explain_optimization(
+    input_shape=(3, 1, 128, 128, 128),
+    dtype="bfloat16",
+    device="cpu",
+)
+assert report.decisions
 assert 'site-packages' in mednext_accel.__file__
 """
     subprocess.run([str(python), "-c", program], cwd=outside_repository, check=True)

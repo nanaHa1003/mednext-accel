@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run isolated MedNeXt training profiles across policies and compile modes."""
+"""Run isolated MedNeXt training profiles across optimization and compile modes."""
 
 from __future__ import annotations
 
@@ -19,10 +19,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--classes", type=int, nargs="+", default=(3, 8))
     parser.add_argument("--dtypes", choices=("fp32", "bf16", "fp16"), nargs="+", default=("bf16",))
     parser.add_argument(
-        "--policies",
-        choices=("torch", "conservative", "autotune"),
+        "--optimizations",
+        choices=("auto", "reference"),
         nargs="+",
-        default=("torch", "conservative"),
+        default=("reference", "auto"),
     )
     parser.add_argument(
         "--compile-modes",
@@ -44,7 +44,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--profile-steps", type=int, default=3)
     parser.add_argument("--deep-supervision", action="store_true")
     parser.add_argument("--checkpoint-stages", type=int, nargs="*")
-    parser.add_argument("--include-stride2-dx", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--continue-on-error", action="store_true")
     return parser.parse_args()
@@ -57,10 +56,11 @@ def main() -> None:
     worker = Path(__file__).with_name("profile_train_step.py")
     runs = []
     combinations = itertools.product(
-        args.classes, args.dtypes, args.policies, args.compile_modes, range(1, args.repeats + 1)
+        args.classes, args.dtypes, args.optimizations, args.compile_modes,
+        range(1, args.repeats + 1),
     )
-    for classes, dtype, policy, compile_mode, repeat in combinations:
-        name = f"c{classes}_{dtype}_{policy}_{compile_mode}_r{repeat}"
+    for classes, dtype, optimization, compile_mode, repeat in combinations:
+        name = f"c{classes}_{dtype}_{optimization}_{compile_mode}_r{repeat}"
         output = args.output / name
         profile_steps = args.profile_steps if repeat == 1 else 0
         command = [
@@ -80,8 +80,8 @@ def main() -> None:
             str(args.kernel_size),
             "--dtype",
             dtype,
-            "--policy",
-            policy,
+            "--optimization",
+            optimization,
             "--compile-mode",
             compile_mode,
             "--warmup",
@@ -96,8 +96,6 @@ def main() -> None:
         if args.checkpoint_stages is not None:
             command.append("--checkpoint-stages")
             command.extend(str(stage) for stage in args.checkpoint_stages)
-        if args.include_stride2_dx:
-            command.append("--include-stride2-dx")
         record = {"name": name, "command": command, "status": "planned"}
         runs.append(record)
         print(" ".join(command))
