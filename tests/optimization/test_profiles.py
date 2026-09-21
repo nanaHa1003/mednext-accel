@@ -42,3 +42,10 @@ def test_loader_rejects_modes_and_unknown_suffix(tmp_path: Path) -> None:
     path.write_text("")
     with pytest.raises(ValueError, match="suffix"):
         load_profile(path)
+
+
+def test_loader_expands_home_paths(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / "profile.json"
+    path.write_text(json.dumps(PROFILE))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert load_profile("~/profile.json").name == "test-sm120"

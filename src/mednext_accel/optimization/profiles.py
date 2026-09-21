@@ -24,7 +24,7 @@ def load_profile(
         return parse_profile(source, registry=registry)
     if isinstance(source, str) and source in ("auto", "reference"):
         raise ValueError(f"{source!r} is a factory mode, not a profile document")
-    path = Path(source)
+    path = Path(source).expanduser()
     if path.suffix.lower() == ".json":
         data = json.loads(path.read_text())
     elif path.suffix.lower() in (".yaml", ".yml"):
