@@ -95,10 +95,14 @@ def apply_validation_results(
     rejected_batches: set[int] = set()
     for segment in segments:
         endpoints = (
-            (segment.batches[0],)
-            if len(segment.batches) == 1
-            else (segment.batches[0], segment.batches[-1])
-        ) if segment.batches else ()
+            (
+                (segment.batches[0],)
+                if len(segment.batches) == 1
+                else (segment.batches[0], segment.batches[-1])
+            )
+            if segment.batches
+            else ()
+        )
         if not all(accepted.get(batch) is True for batch in endpoints):
             rejected_batches.update(segment.batches)
 

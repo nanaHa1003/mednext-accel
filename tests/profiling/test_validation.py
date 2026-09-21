@@ -54,9 +54,7 @@ def test_equal_consecutive_signatures_form_one_segment() -> None:
 
 
 def test_sample_gap_and_decision_change_split_segments() -> None:
-    native = (
-        ("pointwise_conv3d", "regular", "training", (16, 16, 16), 8, 16, "reference", ()),
-    )
+    native = (("pointwise_conv3d", "regular", "training", (16, 16, 16), 8, 16, "reference", ()),)
     gemm = (
         (
             "pointwise_conv3d",
