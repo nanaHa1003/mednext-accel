@@ -5,6 +5,7 @@ import copy
 import pytest
 import torch
 from torch import nn
+from torch.nn import functional as F
 
 from mednext_accel import mednext_base
 from mednext_accel.ops.pointwise import GemmPointwise3d, replace_pointwise_convs
@@ -45,6 +46,56 @@ def test_shape_selection_falls_back_to_convolution() -> None:
     x = torch.randn(1, 3, 3, 4, 5, dtype=torch.float64)
 
     torch.testing.assert_close(candidate(x), conv(x), rtol=0, atol=0)
+
+
+def test_batch_selection_falls_back_to_convolution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conv = nn.Conv3d(3, 7, 1).double()
+    candidate = GemmPointwise3d(
+        conv,
+        selected_shapes={(3, 7, 3, 4, 5)},
+        selected_batch_size=2,
+    )
+    x = torch.randn(3, 3, 3, 4, 5, dtype=torch.float64)
+
+    def reject_gemm(*args: object, **kwargs: object) -> torch.Tensor:
+        raise AssertionError("GEMM was called for an unselected batch")
+
+    monkeypatch.setattr(torch, "mm", reject_gemm)
+    monkeypatch.setattr(torch, "addmm", reject_gemm)
+
+    torch.testing.assert_close(candidate(x), conv(x), rtol=0, atol=0)
+
+
+def test_batched_gemm_uses_independent_sample_matrices(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidate = GemmPointwise3d(nn.Conv3d(3, 7, 1).double())
+    x = torch.randn(2, 3, 3, 4, 5, dtype=torch.float64)
+
+    def reject_batched_matmul(*args: object, **kwargs: object) -> torch.Tensor:
+        raise AssertionError("the batch dimension must not be sent through torch.matmul")
+
+    monkeypatch.setattr(torch, "matmul", reject_batched_matmul)
+
+    torch.testing.assert_close(candidate(x), F.conv3d(x, candidate.weight, candidate.bias))
+
+
+def test_eval_uses_native_convolution(monkeypatch: pytest.MonkeyPatch) -> None:
+    conv = nn.Conv3d(3, 7, 1).double().eval()
+    candidate = GemmPointwise3d(copy.deepcopy(conv)).eval()
+    x = torch.randn(2, 3, 3, 4, 5, dtype=torch.float64)
+
+    def reject_gemm(*args: object, **kwargs: object) -> torch.Tensor:
+        raise AssertionError("training GEMM was called during evaluation")
+
+    monkeypatch.setattr(torch, "mm", reject_gemm)
+    monkeypatch.setattr(torch, "addmm", reject_gemm)
+    monkeypatch.setattr(torch, "matmul", reject_gemm)
+
+    with torch.no_grad():
+        torch.testing.assert_close(candidate(x), conv(x), rtol=0, atol=0)
 
 
 def test_ineligible_layers_are_preserved() -> None:

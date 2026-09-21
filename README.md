@@ -187,11 +187,14 @@ Use `fullgraph=True` when the complete training graph is supported. On the RTX
 `mode="max-autotune-no-cudagraphs"` has worked well for long runs with a fixed
 input shape and enough steps to amortize compilation.
 
-The `torch` policy uses only native operators. `conservative` applies the narrow
-RTX 50-series BF16 configurations validated in this repository. Its current
-model-level validation envelope covers positive batch sizes with `128x128x128`
-inputs. `autotune` benchmarks every unique eligible batch and operator shape on
-the current GPU and caches the result.
+The `torch` policy uses only native operators. `conservative` applies narrow
+SM 12.0 BF16 configurations measured on the RTX 5090. For
+`128x128x128` inputs, regular depthwise kernels accept any positive batch size;
+batches 1, 2, 4, and 6 have measured dW launch parameters. Batches 2, 4, and 6
+also select measured per-sample pointwise GEMMs to avoid unfavorable batched
+cuDNN backward algorithms. Other batches retain native pointwise convolutions.
+`autotune` benchmarks every unique eligible batch and operator shape on the
+current GPU and caches the result.
 Every unselected shape uses PyTorch. Optional backends preserve parameter
 identity and state-dict paths. See [optimization and compilation](docs/optimization.md).
 

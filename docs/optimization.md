@@ -21,10 +21,13 @@ model.compile(mode=report.compile_mode, fullgraph=True)
 ```
 
 `torch` disables all installed optional backends. `conservative` selects only
-the BF16, 128-cubed depthwise configurations validated end to end across batch
-sizes on an SM 12.0 GPU. Other hardware and shapes stay on PyTorch. `autotune`
-measures each unique eligible shape using the requested batch size on the current
-device. Its cache key includes model topology, device identity and capability,
+the BF16, 128-cubed configurations validated end to end on an RTX 5090. Regular
+depthwise dW uses measured batch-aware splits for batches 1, 2, 4, and 6.
+Measured pointwise shapes use independent per-sample GEMMs for batches 2, 4, and
+6; batch one and unmeasured batches retain native pointwise convolution. Other
+hardware and spatial shapes stay on PyTorch. `autotune` measures each unique
+eligible shape using the requested batch size on the current device. Its cache
+key includes model topology, device identity and capability,
 dtype, input shape, PyTorch, CUDA, cuDNN, Triton, package and kernel versions,
 and the planned compile mode.
 

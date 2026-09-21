@@ -13,6 +13,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--kind", choices=("regular", "transpose", "downsample"), required=True)
     parser.add_argument("--channels", type=int, required=True)
     parser.add_argument("--spatial", type=int, required=True)
+    parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--dtype", choices=("fp32", "bf16", "fp16"), default="bf16")
     parser.add_argument("--warmup", type=int, default=20)
     parser.add_argument("--repetitions", type=int, default=100)
@@ -31,6 +32,7 @@ def main() -> None:
     dtype = {"fp32": torch.float32, "bf16": torch.bfloat16, "fp16": torch.float16}[args.dtype]
     native_ms, candidate_ms = _benchmark_depthwise(
         args.kind,
+        args.batch_size,
         args.channels,
         args.spatial,
         dtype,
@@ -39,6 +41,7 @@ def main() -> None:
     )
     result = {
         "kind": args.kind,
+        "batch_size": args.batch_size,
         "channels": args.channels,
         "spatial": args.spatial,
         "dtype": str(dtype),

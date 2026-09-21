@@ -20,6 +20,7 @@ class GemmPointwise3d(nn.Module):
         self,
         conv: nn.Conv3d,
         selected_shapes: Iterable[PointwiseShape] | None = None,
+        selected_batch_size: int | None = None,
     ) -> None:
         super().__init__()
         self.weight = conv.weight
@@ -32,10 +33,16 @@ class GemmPointwise3d(nn.Module):
         self.dilation = conv.dilation
         self.groups = conv.groups
         self.selected_shapes = None if selected_shapes is None else frozenset(selected_shapes)
+        self.selected_batch_size = selected_batch_size
         self.train(conv.training)
 
     def forward(self, x: Tensor) -> Tensor:
+        if not self.training or not torch.is_grad_enabled():
+            return F.conv3d(x, self.weight, self.bias)
         unbatched = x.ndim == 4
+        batch_size = 1 if unbatched else x.shape[0]
+        if self.selected_batch_size is not None and batch_size != self.selected_batch_size:
+            return F.conv3d(x, self.weight, self.bias)
         if unbatched:
             x = x.unsqueeze(0)
         spatial = x.shape[2:]
@@ -53,9 +60,15 @@ class GemmPointwise3d(nn.Module):
                 output = torch.addmm(self.bias[:, None], weight, flattened[0])
             output = output.unsqueeze(0)
         else:
-            output = torch.matmul(weight, flattened)
-            if self.bias is not None:
-                output = output + self.bias.to(output.dtype)[None, :, None]
+            if self.bias is None:
+                output = torch.stack([torch.mm(weight, sample) for sample in flattened.unbind()])
+            else:
+                output = torch.stack(
+                    [
+                        torch.addmm(self.bias[:, None], weight, sample)
+                        for sample in flattened.unbind()
+                    ]
+                )
         output = output.reshape(x.shape[0], self.out_channels, *spatial)
         return output.squeeze(0) if unbatched else output
 
@@ -75,14 +88,19 @@ def _eligible(conv: nn.Module) -> bool:
 def replace_pointwise_convs(
     model: nn.Module,
     selected_shapes: Iterable[PointwiseShape] | None = None,
+    selected_batch_size: int | None = None,
 ) -> int:
     """Replace eligible descendants in place and return the replacement count."""
 
     count = 0
     for name, child in list(model.named_children()):
         if _eligible(child):
-            setattr(model, name, GemmPointwise3d(child, selected_shapes))
+            setattr(
+                model,
+                name,
+                GemmPointwise3d(child, selected_shapes, selected_batch_size),
+            )
             count += 1
         else:
-            count += replace_pointwise_convs(child, selected_shapes)
+            count += replace_pointwise_convs(child, selected_shapes, selected_batch_size)
     return count

@@ -157,12 +157,36 @@ that integration boundary is improved.
 
 ## Per-shape automatic selection
 
-`kernel_autotune.py` provides `benchmark_kernel_choices(model, input_shape, dtype)`
-and `apply_kernel_policy(model, report)`. It captures the actual spatial shapes
-created by the chosen MedNeXt variant, benchmarks each unique eligible pointwise
-and depthwise shape, and applies only the faster choices. An optional cache is
-keyed by GPU/software/dtype/input/model signature and selector source hash.
-Parameter objects and state-dict keys remain unchanged. The selector currently
-requires a CUDA model and benchmarks the requested positive batch size;
-downsample dX remains opt-in because its isolated gain did not yet translate to
-a full compiled-model gain.
+`optimize(..., policy="autotune")` captures the actual spatial shapes created by
+the chosen MedNeXt variant, benchmarks each unique eligible pointwise and
+depthwise shape, and applies only the faster choices. An optional cache is keyed
+by GPU/software/dtype/input/model signature and selector source hash. Parameter
+objects and state-dict keys remain unchanged. The selector requires a CUDA model
+and benchmarks the requested positive batch size; downsample dX remains opt-in
+because its isolated gain did not yet translate to a full compiled-model gain.
+
+## Batch-aware RTX 5090 tuning
+
+The production policy keeps the batch-one launches above and selects measured
+dW splits for batches 2, 4, and 6. Pointwise convolution backward showed a
+separate cuDNN algorithm cliff once the batch dimension exceeded one. For the
+measured Base shapes, independent per-sample GEMMs avoid that cliff while
+preserving parameter objects and state-dict paths.
+
+The table below uses MedNeXt Base, 128 cubed input, BF16, three classes, deep
+supervision, AdamW, `torch.compile(mode="default", fullgraph=True)`, all-expansion
+checkpointing, five warmups, and 20 measured steps. Each row is one run.
+
+| Batch | Previous policy | Batch-aware policy | Reduction | Samples/s | Peak allocated |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 64.19 ms | 64.02 ms | 0.3% | 15.62 | 3,762 MiB |
+| 2 | 161.17 ms | 149.11 ms | 7.5% | 13.41 | 8,459 MiB |
+| 4 | 326.58 ms | 306.12 ms | 6.3% | 13.07 | 16,729 MiB |
+| 6 | 501.32 ms | 465.77 ms | 7.1% | 12.88 | 21,992 MiB |
+
+Without checkpointing, batch two improved from 151.58 to 134.06 ms, an 11.6%
+step-time reduction. Its throughput increased from 13.19 to 14.92 samples/s.
+The batch-six peak-allocation reduction was reproduced in two independent runs;
+it comes from avoiding the native pointwise algorithms and their larger
+temporary storage. These selections remain specific to the measured GPU and
+software stack; unmeasured batches keep native pointwise convolution.

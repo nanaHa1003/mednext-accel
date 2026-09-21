@@ -12,6 +12,22 @@ from torch.nn import functional as F
 from mednext_accel.ops.depthwise import replace_depthwise_convs
 
 
+def test_regular_depthwise_configuration_uses_tuned_batch_size() -> None:
+    import mednext_accel.ops._triton.depthwise as backend
+
+    assert backend.regular_config(1, 32, 128) == (64, 1024, 128)
+    assert backend.regular_config(2, 32, 128) == (128, 1024, 128)
+    assert backend.regular_config(4, 64, 64) == (32, 1024, 128)
+    assert backend.regular_config(6, 128, 32) == (8, 1024, 128)
+
+
+def test_regular_depthwise_configuration_falls_back_for_unmeasured_batch() -> None:
+    import mednext_accel.ops._triton.depthwise as backend
+
+    assert backend.regular_config(3, 32, 128) == (64, 1024, 128)
+    assert backend.regular_config(2, 999, 128) is None
+
+
 def test_importing_dispatch_does_not_import_triton() -> None:
     code = (
         "import sys; import mednext_accel.ops.depthwise; "

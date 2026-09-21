@@ -46,17 +46,23 @@ def _device(model: nn.Module) -> torch.device:
         raise ValueError("model must have parameters") from error
 
 
-def _set_selections(model: nn.Module, selections: BackendSelections) -> None:
+def _set_selections(model: nn.Module, selections: BackendSelections, *, batch_size: int) -> None:
     for module in model.modules():
         kind = getattr(module, "_mednext_accel_backend_kind", None)
         if kind is not None:
             module.selected_shapes = frozenset(getattr(selections, kind))
+            if kind == "pointwise_gemm":
+                module.selected_batch_size = batch_size
 
 
-def _apply_selections(model: nn.Module, selections: BackendSelections) -> int:
+def _apply_selections(model: nn.Module, selections: BackendSelections, *, batch_size: int) -> int:
     replacements = 0
     if selections.pointwise_gemm:
-        replacements += replace_pointwise_convs(model, selected_shapes=selections.pointwise_gemm)
+        replacements += replace_pointwise_convs(
+            model,
+            selected_shapes=selections.pointwise_gemm,
+            selected_batch_size=batch_size,
+        )
     if any(
         (
             selections.depthwise_regular,
@@ -73,7 +79,7 @@ def _apply_selections(model: nn.Module, selections: BackendSelections) -> int:
                 "depthwise_downsample": selections.depthwise_downsample,
             },
         )
-    _set_selections(model, selections)
+    _set_selections(model, selections, batch_size=batch_size)
     return replacements
 
 
@@ -130,7 +136,7 @@ def optimize(
         cache_hit = tuned.cache_hit
         cache_key = tuned.cache_key
 
-    replacements = _apply_selections(model, selections)
+    replacements = _apply_selections(model, selections, batch_size=input_shape[0])
     report = OptimizationReport(
         policy=policy,
         compile_mode=compile_mode,

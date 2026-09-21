@@ -10,10 +10,10 @@ python benchmarks/autotune.py \
   --output artifacts/autotune-rtx5090.json
 
 python benchmarks/depthwise.py \
-  --kind regular --channels 32 --spatial 128
+  --kind regular --batch-size 2 --channels 32 --spatial 128
 
 python benchmarks/pointwise.py \
-  --in-channels 32 --out-channels 96 --spatial 64 64 64
+  --batch-size 2 --in-channels 32 --out-channels 96 --spatial 64 64 64
 
 # Direct official/MONAI/package comparison (requires an official checkout)
 python benchmarks/implementations.py \

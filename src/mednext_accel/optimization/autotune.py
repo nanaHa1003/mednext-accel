@@ -68,10 +68,17 @@ def _benchmark_pointwise(
         flattened = x.flatten(2)
         flattened_gradient = gradient.flatten(2)
         matrix = weight.flatten(1)
-        torch.matmul(matrix.t(), flattened_gradient)
-        torch.matmul(flattened_gradient, flattened.transpose(1, 2)).sum(dim=0)
-        flattened_gradient.sum(dim=(0, 2))
-        torch.matmul(matrix, flattened) + bias[None, :, None]
+        grad_weights = []
+        outputs = []
+        for batch in range(batch_size):
+            torch.mm(matrix.t(), flattened_gradient[batch])
+            grad_weights.append(
+                torch.mm(flattened_gradient[batch], flattened[batch].transpose(0, 1))
+            )
+            flattened_gradient[batch].sum(dim=1)
+            outputs.append(torch.addmm(bias[:, None], matrix, flattened[batch]))
+        torch.stack(grad_weights).sum(dim=0)
+        torch.stack(outputs)
 
     return _bench(native, warmup, repetitions), _bench(candidate, warmup, repetitions)
 
@@ -128,7 +135,7 @@ def _benchmark_depthwise(
         )
 
     if kind == "regular":
-        splits, block, dx_block = backend._REGULAR_CONFIGS[(channels, spatial)]
+        splits, block, dx_block = backend.regular_config(batch_size, channels, spatial)
 
         def candidate() -> None:
             forward()

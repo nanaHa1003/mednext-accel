@@ -31,3 +31,16 @@ def test_cli_help_does_not_require_eager_triton_import(script: str) -> None:
 
     assert result.returncode == 0, result.stderr
     assert "usage:" in result.stdout.lower()
+
+
+@pytest.mark.parametrize("script", ["benchmarks/depthwise.py", "benchmarks/pointwise.py"])
+def test_kernel_benchmark_accepts_batch_size(script: str) -> None:
+    result = subprocess.run(
+        [sys.executable, str(ROOT / script), "--help"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert "--batch-size" in result.stdout

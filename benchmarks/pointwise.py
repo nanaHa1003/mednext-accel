@@ -13,6 +13,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--in-channels", type=int, required=True)
     parser.add_argument("--out-channels", type=int, required=True)
     parser.add_argument("--spatial", type=int, nargs=3, required=True)
+    parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--dtype", choices=("fp32", "bf16", "fp16"), default="bf16")
     parser.add_argument("--warmup", type=int, default=20)
     parser.add_argument("--repetitions", type=int, default=100)
@@ -30,6 +31,7 @@ def main() -> None:
         raise SystemExit("CUDA is required")
     dtype = {"fp32": torch.float32, "bf16": torch.bfloat16, "fp16": torch.float16}[args.dtype]
     native_ms, candidate_ms = _benchmark_pointwise(
+        args.batch_size,
         args.in_channels,
         args.out_channels,
         tuple(args.spatial),
@@ -38,6 +40,7 @@ def main() -> None:
         args.repetitions,
     )
     result = {
+        "batch_size": args.batch_size,
         "in_channels": args.in_channels,
         "out_channels": args.out_channels,
         "spatial": args.spatial,

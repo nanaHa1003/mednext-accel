@@ -762,6 +762,19 @@ _REGULAR_CONFIGS = {
     (256, 16): (1, 512, 128),
     (512, 8): (1, 128, 128),
 }
+_REGULAR_BATCH_SPLITS = {
+    (2, 32, 128): 128,
+    (2, 64, 64): 16,
+    (2, 256, 16): 2,
+    (4, 32, 128): 256,
+    (4, 64, 64): 32,
+    (4, 128, 32): 4,
+    (4, 256, 16): 4,
+    (6, 32, 128): 384,
+    (6, 64, 64): 48,
+    (6, 128, 32): 8,
+    (6, 256, 16): 6,
+}
 _REGULAR_CHANNELS = frozenset(channels for channels, _ in _REGULAR_CONFIGS)
 _TRANSPOSE_CONFIGS = {(64, 64): (64, 1024)}
 _TRANSPOSE_CHANNELS = frozenset(channels for channels, _ in _TRANSPOSE_CONFIGS)
@@ -772,6 +785,18 @@ _DOWNSAMPLE_CONFIGS = {
     (256, 16): 128,
 }
 _DOWNSAMPLE_CHANNELS = frozenset(channels for channels, _ in _DOWNSAMPLE_CONFIGS)
+
+
+def regular_config(
+    batch_size: int, channels: int, spatial_size: int
+) -> tuple[int, int, int] | None:
+    """Return the measured regular depthwise configuration for one batch shape."""
+    base = _REGULAR_CONFIGS.get((channels, spatial_size))
+    if base is None:
+        return None
+    _, dw_block, dx_block = base
+    dw_splits = _REGULAR_BATCH_SPLITS.get((batch_size, channels, spatial_size), base[0])
+    return dw_splits, dw_block, dx_block
 
 
 class SplitDepthwiseConv3d(torch.nn.Module):
@@ -794,7 +819,7 @@ class SplitDepthwiseConv3d(torch.nn.Module):
         self.train(conv.training)
 
     def forward(self, x):
-        config = _REGULAR_CONFIGS.get((x.shape[1], x.shape[2]))
+        config = regular_config(x.shape[0], x.shape[1], x.shape[2])
         if (
             self.training
             and torch.is_grad_enabled()
