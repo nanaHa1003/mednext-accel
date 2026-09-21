@@ -12,6 +12,7 @@ from ..optimization.schema import profile_to_primitive
 from .batch_search import ProbeResult, search_batches
 from .benchmark import run_json_subprocess
 from .campaign import Campaign, Workload
+from .execution import WorkloadShapes
 from .progress import ProgressEvent, ProgressReporter
 from .synthesize import Measurement, candidate_wins, synthesize_profile
 
@@ -414,6 +415,13 @@ def _depthwise_shapes(
     return tuple(sorted(found))
 
 
+def discover_workload_shapes(workload: Workload) -> WorkloadShapes:
+    return WorkloadShapes(
+        pointwise=_pointwise_shapes(workload),
+        depthwise=_depthwise_shapes(workload),
+    )
+
+
 def _batches(
     campaign: Campaign,
     workload: Workload,
@@ -505,8 +513,9 @@ def run_campaign(
                 )
             )
         batches, reference_steps = _batches(campaign, workload, total_vram, progress=progress)
-        shapes = _pointwise_shapes(workload)
-        depthwise_shapes = _depthwise_shapes(workload)
+        workload_shapes = discover_workload_shapes(workload)
+        shapes = workload_shapes.pointwise
+        depthwise_shapes = workload_shapes.depthwise
         depthwise_probe_count = sum(
             1 if direction in ("transpose", "downsample") else 2
             for direction, *_ in depthwise_shapes
