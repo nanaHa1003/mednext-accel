@@ -56,13 +56,26 @@ def test_package_cli_help_does_not_import_cuda(arguments, capsys) -> None:
 
 
 def test_zero_argument_profile_uses_default_campaign(monkeypatch, capsys) -> None:
-    seen = []
+    seen = {}
+
+    class Reporter:
+        def close(self) -> None:
+            pass
+
+    reporter = Reporter()
 
     class Result:
         output_path = "generated.json"
         measurements = ()
 
-    monkeypatch.setattr(cli, "profile", lambda source=None: seen.append(source) or Result())
-    assert cli.main(["profile"]) == 0
-    assert seen == [None]
+    monkeypatch.setattr(
+        cli,
+        "profile",
+        lambda source=None, progress=None: (
+            seen.update(source=source, progress=progress) or Result()
+        ),
+    )
+    monkeypatch.setattr(cli, "create_progress_reporter", lambda mode: reporter)
+    assert cli.main(["profile", "--progress", "plain"]) == 0
+    assert seen == {"source": None, "progress": reporter}
     assert "generated.json" in capsys.readouterr().out

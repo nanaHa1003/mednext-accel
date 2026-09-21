@@ -50,6 +50,16 @@ and kernel benchmark runs in a separate process, so CUDA OOM does not poison the
 campaign. Batch search tests every integer through eight when feasible, expands
 by powers of two, then uses binary refinement at the memory boundary.
 
+Interactive terminals show a Rich progress display. Redirected output and
+`tee` automatically use stable plain-text lines. Override the selection with
+`--progress auto`, `--progress plain`, or `--progress quiet`. Batch search shows
+elapsed time while its total is still unknown; after feasible batches are known,
+operator profiling shows completed/total work and ETA.
+
+The generated profile records the GPU name, SM, VRAM, NVIDIA driver, platform,
+Python, mednext-accel, PyTorch, CUDA, cuDNN, Triton, objective, and compile mode
+under `profile.provenance`. It omits hostnames and usernames.
+
 A minimal campaign can narrow the workload:
 
 ```yaml
