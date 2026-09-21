@@ -51,6 +51,22 @@ def deduplicate_workloads(workloads: tuple[Workload, ...]) -> tuple[Workload, ..
     return tuple(dict.fromkeys(workloads))
 
 
+def validate_campaign_dtypes(campaign: Campaign) -> None:
+    """Reject dtypes unsupported by the BF16-only kernel and model probes."""
+    unsupported = sorted(
+        {
+            dtype
+            for workload in campaign.workloads
+            for dtype in workload.dtypes
+            if dtype != "bfloat16"
+        }
+    )
+    if unsupported:
+        raise ValueError(
+            f"unsupported profiling dtype(s): {', '.join(unsupported)}; supported dtype: bfloat16"
+        )
+
+
 def build_execution_plan(
     campaign: Campaign,
     *,
@@ -59,6 +75,7 @@ def build_execution_plan(
 ) -> ExecutionPlan:
     """Discover, search, and globally deduplicate a campaign's kernel cases."""
 
+    validate_campaign_dtypes(campaign)
     workloads = deduplicate_workloads(campaign.workloads)
     discovered = tuple((workload, discover(workload)) for workload in workloads)
     searched = tuple((workload, shapes, search(workload)) for workload, shapes in discovered)

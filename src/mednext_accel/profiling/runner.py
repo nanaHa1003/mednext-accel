@@ -13,7 +13,12 @@ from ..optimization.schema import profile_to_primitive
 from .batch_search import ProbeResult, search_batches
 from .benchmark import run_json_subprocess
 from .campaign import Campaign, Workload
-from .execution import BatchSearchResult, WorkloadShapes, build_execution_plan
+from .execution import (
+    BatchSearchResult,
+    WorkloadShapes,
+    build_execution_plan,
+    validate_campaign_dtypes,
+)
 from .grouped import run_group_with_bisection
 from .progress import ProgressEvent, ProgressReporter
 from .synthesize import Measurement, measurement_from_result, synthesize_profile
@@ -517,6 +522,8 @@ class CampaignRun:
 
 def execute_campaign(campaign: Campaign, progress: ProgressReporter | None = None) -> CampaignRun:
     """Execute shared kernel groups and validate each workload's decision boundaries."""
+    validate_campaign_dtypes(campaign)
+
     import torch
 
     if not torch.cuda.is_available():

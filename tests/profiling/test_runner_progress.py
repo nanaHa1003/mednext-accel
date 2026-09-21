@@ -418,3 +418,40 @@ def test_no_feasible_batches_launch_no_kernel_or_validation_children(monkeypatch
     assert run.statistics.kernel_case_count == 0
     assert run.statistics.kernel_group_count == 0
     assert run.statistics.whole_model_validation_count == 0
+
+
+@pytest.mark.parametrize("dtypes", [("float32",), ("bfloat16", "float32")])
+@pytest.mark.parametrize("entrypoint", [runner.execute_campaign, runner.run_campaign])
+def test_runner_rejects_unsupported_dtypes_before_gpu_or_planning(monkeypatch, dtypes, entrypoint):
+    supported = _campaign_contexts().workloads[0]
+    campaign = replace(
+        _campaign_contexts(), workloads=(supported, replace(supported, dtypes=dtypes))
+    )
+    callbacks = []
+
+    class Cuda(_Cuda):
+        @staticmethod
+        def is_available():
+            callbacks.append("cuda")
+            return True
+
+    class Torch:
+        cuda = Cuda()
+
+    monkeypatch.setitem(__import__("sys").modules, "torch", Torch())
+    monkeypatch.setattr(
+        runner,
+        "discover_workload_shapes",
+        lambda workload: callbacks.append("discover") or WorkloadShapes((), ()),
+    )
+    monkeypatch.setattr(
+        runner,
+        "_batches",
+        lambda *args, **kwargs: callbacks.append("search") or ((), {}),
+    )
+    monkeypatch.setattr(runner, "_invoke", lambda payload: callbacks.append("invoke") or {})
+
+    with pytest.raises(ValueError, match=r"unsupported.*dtype.*float32"):
+        entrypoint(campaign)
+
+    assert callbacks == []

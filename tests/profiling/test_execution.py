@@ -1,5 +1,7 @@
 from dataclasses import replace
 
+import pytest
+
 from mednext_accel.profiling.batch_search import BatchSearch
 from mednext_accel.profiling.campaign import Campaign, Workload
 from mednext_accel.profiling.execution import (
@@ -84,3 +86,21 @@ def test_planning_discovers_every_shape_before_batch_search() -> None:
     assert plan.kernel_cases == ()
     assert plan.kernel_groups == ()
     assert plan.requested_case_count == 0
+
+
+@pytest.mark.parametrize("dtypes", [("float32",), ("bfloat16", "float32")])
+def test_plan_rejects_unsupported_dtypes_before_any_discovery_or_search(dtypes):
+    supported = Workload("mednext_v1", "base", (128, 128, 128))
+    campaign = Campaign(
+        "mednext-v1", (supported, replace(supported, dtypes=dtypes)), BatchSearch(maximum=1)
+    )
+    callbacks = []
+
+    with pytest.raises(ValueError, match=r"unsupported.*dtype.*float32"):
+        build_execution_plan(
+            campaign,
+            discover=lambda workload: callbacks.append("discover") or WorkloadShapes((), ()),
+            search=lambda workload: callbacks.append("search") or BatchSearchResult((), {}),
+        )
+
+    assert callbacks == []
