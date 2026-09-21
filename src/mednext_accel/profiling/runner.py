@@ -442,8 +442,10 @@ def _batches(
     progress: ProgressReporter | None = None,
 ) -> tuple[tuple[int, ...], dict[int, dict[str, object]]]:
     model_results: dict[int, dict[str, object]] = {}
+    completed_probes = 0
 
     def probe(batch: int) -> ProbeResult:
+        nonlocal completed_probes
         if progress is not None:
             progress.emit(ProgressEvent("status", "batch-search", message=f"probing batch={batch}"))
         payload = {
@@ -462,6 +464,15 @@ def _batches(
                 ProgressEvent(
                     "status",
                     "batch-search",
+                    message=f"batch={batch} {state} peak={peak:.1f} GiB",
+                )
+            )
+            completed_probes += 1
+            progress.emit(
+                ProgressEvent(
+                    "advance",
+                    "batch-search",
+                    completed=completed_probes,
                     message=f"batch={batch} {state} peak={peak:.1f} GiB",
                 )
             )
@@ -548,15 +559,28 @@ def execute_campaign(campaign: Campaign, progress: ProgressReporter | None = Non
     raw_results: dict[str, dict[str, object]] = {}
     group_attempts = 0
     group_total = len(plan.kernel_groups)
+    resolved_cases = 0
     if progress is not None:
+        progress.emit(
+            ProgressEvent(
+                "status",
+                "kernel-groups",
+                message=(
+                    f"kernel plan: {group_total} planned groups, "
+                    f"{len(plan.kernel_cases)} unique experiments, "
+                    f"{plan.requested_case_count} requested references"
+                ),
+            )
+        )
         progress.emit(ProgressEvent("stage_start", "kernel-groups", total=group_total))
 
-    def on_attempt(event: str, attempts: int, resolved_cases: int) -> None:
-        nonlocal group_attempts, group_total
+    def on_attempt(event: str, attempts: int, resolved_delta: int) -> None:
+        nonlocal group_attempts, group_total, resolved_cases
         if event == "scheduled":
             group_total += attempts
         else:
             group_attempts += attempts
+            resolved_cases += resolved_delta
         if progress is not None:
             progress.emit(
                 ProgressEvent(
@@ -564,6 +588,8 @@ def execute_campaign(campaign: Campaign, progress: ProgressReporter | None = Non
                     "kernel-groups",
                     completed=group_attempts,
                     total=group_total,
+                    secondary_completed=resolved_cases,
+                    secondary_total=len(plan.kernel_cases),
                 )
             )
 
@@ -571,8 +597,7 @@ def execute_campaign(campaign: Campaign, progress: ProgressReporter | None = Non
         raw_results.update(run_group_with_bisection(group, _invoke, on_attempt=on_attempt))
 
     cases_by_key = {case.key: case for case in plan.kernel_cases}
-    measurements: list[Measurement] = []
-    validation_count = 0
+    validation_plans = []
     for workload_run in plan.workloads:
         workload = workload_run.workload
         context_measurements = tuple(
@@ -593,19 +618,38 @@ def execute_campaign(campaign: Campaign, progress: ProgressReporter | None = Non
             }
         )
         endpoints = validation_batches(segments)
-        if not endpoints:
-            measurements.extend(context_measurements)
-            continue
-        provisional = synthesize_profile(
-            context_measurements,
-            name="campaign-candidate",
-            sm=torch.cuda.get_device_capability(),
-            objective=campaign.objective,
+        provisional = (
+            synthesize_profile(
+                context_measurements,
+                name="campaign-candidate",
+                sm=torch.cuda.get_device_capability(),
+                objective=campaign.objective,
+            )
+            if endpoints
+            else None
         )
-        if progress is not None:
-            progress.emit(ProgressEvent("stage_start", "validation", total=len(endpoints)))
+        validation_plans.append(
+            (workload_run, context_measurements, segments, endpoints, provisional)
+        )
+
+    validation_total = sum(len(item[3]) for item in validation_plans)
+    if progress is not None:
+        progress.emit(
+            ProgressEvent(
+                "status",
+                "validation",
+                message=f"validation plan: {validation_total} whole-model validations",
+            )
+        )
+        progress.emit(ProgressEvent("stage_start", "validation", total=validation_total))
+
+    measurements: list[Measurement] = []
+    validation_count = 0
+    for workload_run, context_measurements, segments, endpoints, provisional in validation_plans:
+        workload = workload_run.workload
         accepted: dict[int, bool] = {}
-        for completed, batch in enumerate(endpoints, 1):
+        for batch in endpoints:
+            assert provisional is not None
             candidate_step = _invoke(
                 {
                     "kind": "model",
@@ -624,8 +668,8 @@ def execute_campaign(campaign: Campaign, progress: ProgressReporter | None = Non
                     ProgressEvent(
                         "advance",
                         "validation",
-                        completed=completed,
-                        total=len(endpoints),
+                        completed=validation_count,
+                        total=validation_total,
                         message=f"batch={batch} {'accepted' if accepted[batch] else 'rejected'}",
                     )
                 )

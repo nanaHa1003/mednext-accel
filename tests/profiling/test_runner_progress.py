@@ -219,6 +219,36 @@ def _successful_group(payload):
     }
 
 
+def test_batch_search_advances_after_every_completed_probe(monkeypatch) -> None:
+    def search(config, *, total_vram_bytes, probe):
+        assert total_vram_bytes == 48 * 1024**3
+        probes = (probe(1), probe(3))
+        return type("SearchResult", (), {"probes": probes})()
+
+    outcomes = iter(
+        (
+            {"status": "ok", "step_ms": 10.0, "peak_bytes": 1024**3},
+            {"status": "oom", "message": "out of memory"},
+        )
+    )
+    monkeypatch.setattr(runner, "search_batches", search)
+    monkeypatch.setattr(runner, "_invoke", lambda payload: next(outcomes))
+    reporter = _Recorder()
+
+    batches, _ = runner._batches(
+        _campaign_contexts(),
+        _campaign_contexts().workloads[0],
+        48 * 1024**3,
+        progress=reporter,
+    )
+
+    assert batches == (1,)
+    advances = [event for event in reporter.events if event.kind == "advance"]
+    assert [(event.completed, event.total) for event in advances] == [(1, None), (2, None)]
+    assert advances[0].message == "batch=1 feasible peak=1.0 GiB"
+    assert advances[1].message == "batch=3 oom peak=0.0 GiB"
+
+
 def test_campaign_shares_groups_and_materializes_each_checkpoint_context(monkeypatch, capsys):
     _prepare_campaign(
         monkeypatch,
@@ -274,6 +304,37 @@ def test_campaign_shares_groups_and_materializes_each_checkpoint_context(monkeyp
     assert run.statistics.kernel_case_count == 10
     assert run.statistics.kernel_group_count == 10
     assert run.statistics.whole_model_validation_count == 4
+
+    events = reporter.events
+    kernel_plan = next(
+        event for event in events if event.kind == "status" and event.stage == "kernel-groups"
+    )
+    assert kernel_plan.message == (
+        "kernel plan: 10 planned groups, 10 unique experiments, 20 requested references"
+    )
+    group_advances = [
+        event for event in events if event.kind == "advance" and event.stage == "kernel-groups"
+    ]
+    assert [event.completed for event in group_advances] == list(range(1, 11))
+    assert [event.secondary_completed for event in group_advances] == list(range(1, 11))
+    assert all(event.secondary_total == 10 for event in group_advances)
+    assert (
+        ProgressEvent(
+            "status",
+            "validation",
+            message="validation plan: 4 whole-model validations",
+        )
+        in events
+    )
+    validation_starts = [
+        event for event in events if event.kind == "stage_start" and event.stage == "validation"
+    ]
+    assert validation_starts == [ProgressEvent("stage_start", "validation", total=4)]
+    validation_advances = [
+        event for event in events if event.kind == "advance" and event.stage == "validation"
+    ]
+    assert [event.completed for event in validation_advances] == [1, 2, 3, 4]
+    assert all(event.total == 4 for event in validation_advances)
 
 
 @pytest.mark.parametrize("rejection", ["regression", "error", "missing-reference"])
@@ -394,7 +455,8 @@ def test_statistics_count_physical_bisection_attempts_and_keep_failed_evidence(m
         return _successful_group(payload)
 
     monkeypatch.setattr(runner, "_invoke", invoke)
-    run = runner.execute_campaign(_campaign_contexts())
+    reporter = _Recorder()
+    run = runner.execute_campaign(_campaign_contexts(), progress=reporter)
 
     assert len(attempts) == run.statistics.kernel_group_count == 3
     assert run.statistics.requested_case_count == 4
@@ -405,6 +467,22 @@ def test_statistics_count_physical_bisection_attempts_and_keep_failed_evidence(m
         assert item.valid is (item.out_channels == 64)
         if item.out_channels == 128:
             assert item.reference_ms == item.candidate_ms == 0.0
+
+    group_advances = [
+        event
+        for event in reporter.events
+        if event.kind == "advance" and event.stage == "kernel-groups"
+    ]
+    assert [
+        (event.completed, event.total, event.secondary_completed, event.secondary_total)
+        for event in group_advances
+    ] == [
+        (1, 1, 0, 2),
+        (1, 2, 0, 2),
+        (2, 2, 1, 2),
+        (2, 3, 1, 2),
+        (3, 3, 2, 2),
+    ]
 
 
 def test_no_feasible_batches_launch_no_kernel_or_validation_children(monkeypatch):
