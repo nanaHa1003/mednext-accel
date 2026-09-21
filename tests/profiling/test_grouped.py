@@ -101,3 +101,35 @@ def test_malformed_success_response_is_bisected(malformation: str) -> None:
     ]
     assert set(results) == {cases[0].identifier, cases[1].identifier}
     assert all(item["status"] == "ok" for item in results.values())
+
+
+def test_unhashable_case_identifier_is_bisected_and_accounted_for() -> None:
+    cases = tuple(make_case(value) for value in (8, 16, 32))
+    group = KernelGroup("pointwise", 1, cases)
+    bad_id = cases[1].identifier
+    calls = []
+    attempt_events = []
+
+    def invoke(payload):
+        calls.append(tuple(item["case_id"] for item in payload["cases"]))
+        result = ok_results(payload)
+        for item in result["results"]:
+            if item["case_id"] == bad_id:
+                item["case_id"] = []
+        return result
+
+    results = run_group_with_bisection(
+        group,
+        invoke,
+        on_attempt=lambda event, physical, resolved: attempt_events.append(
+            (event, physical, resolved)
+        ),
+    )
+
+    assert results[cases[0].identifier]["status"] == "ok"
+    assert results[bad_id]["status"] == "infrastructure_error"
+    assert results[cases[2].identifier]["status"] == "ok"
+    assert len(calls) == 5
+    assert sum(item[1] for item in attempt_events if item[0] == "scheduled") == 4
+    assert sum(item[1] for item in attempt_events if item[0] == "completed") == 5
+    assert sum(item[2] for item in attempt_events if item[0] == "completed") == 3

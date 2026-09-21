@@ -25,10 +25,12 @@ def response_matches(group: KernelGroup, result: Mapping[str, object]) -> bool:
     if not isinstance(items, list):
         return False
     identifiers = [item.get("case_id") for item in items if isinstance(item, dict)]
+    if len(identifiers) != len(items) or not all(
+        isinstance(identifier, str) for identifier in identifiers
+    ):
+        return False
     expected = [case.identifier for case in group.cases]
-    return len(identifiers) == len(items) == len(set(identifiers)) and set(identifiers) == set(
-        expected
-    )
+    return len(identifiers) == len(set(identifiers)) and set(identifiers) == set(expected)
 
 
 def run_group_with_bisection(
