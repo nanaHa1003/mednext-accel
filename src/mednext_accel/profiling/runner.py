@@ -11,7 +11,8 @@ from ..optimization.schema import profile_to_primitive
 from .batch_search import ProbeResult, search_batches
 from .benchmark import run_json_subprocess
 from .campaign import Campaign, Workload
-from .synthesize import Measurement, synthesize_profile
+from .progress import ProgressEvent, ProgressReporter
+from .synthesize import Measurement, candidate_wins, synthesize_profile
 
 
 def _checkpoint(value: str):
@@ -312,11 +313,18 @@ def _depthwise_shapes(
 
 
 def _batches(
-    campaign: Campaign, workload: Workload, total_vram: int
+    campaign: Campaign,
+    workload: Workload,
+    total_vram: int,
+    progress: ProgressReporter | None = None,
 ) -> tuple[tuple[int, ...], dict[int, dict[str, object]]]:
     model_results: dict[int, dict[str, object]] = {}
 
     def probe(batch: int) -> ProbeResult:
+        if progress is not None:
+            progress.emit(ProgressEvent(
+                "status", "batch-search", message=f"probing batch={batch}"
+            ))
         payload = {
             "kind": "model", "batch": batch, "workload": asdict(workload),
             "compile_mode": campaign.compile_mode,
@@ -324,6 +332,13 @@ def _batches(
         result = _invoke(payload)
         model_results[batch] = result
         feasible = result.get("status") == "ok"
+        if progress is not None:
+            peak = int(result.get("peak_bytes", 0)) / 1024**3
+            state = "feasible" if feasible else str(result.get("status", "failed"))
+            progress.emit(ProgressEvent(
+                "status", "batch-search",
+                message=f"batch={batch} {state} peak={peak:.1f} GiB",
+            ))
         return ProbeResult(
             batch, feasible, int(result.get("peak_bytes", total_vram + 1)),
             None if feasible else str(result.get("message", result.get("status"))),
@@ -356,32 +371,79 @@ def _whole_model_accepts(
     return candidate_ms < reference_ms and candidate_peak <= reference_peak * 1.15
 
 
-def run_campaign(campaign: Campaign) -> tuple[Measurement, ...]:
+def run_campaign(
+    campaign: Campaign, progress: ProgressReporter | None = None
+) -> tuple[Measurement, ...]:
     import torch
 
     if not torch.cuda.is_available():
         raise RuntimeError("profiling requires an NVIDIA CUDA device")
-    total_vram = torch.cuda.get_device_properties(0).total_memory
+    device = torch.cuda.current_device()
+    total_vram = torch.cuda.get_device_properties(device).total_memory
     measurements: list[Measurement] = []
     for workload_index, workload in enumerate(campaign.workloads, 1):
-        print(
-            f"[{workload_index}/{len(campaign.workloads)}] {workload.variant} "
-            f"{workload.spatial} {workload.checkpointing}", file=sys.stderr,
+        workload_message = (
+            f"{workload_index}/{len(campaign.workloads)} · {workload.variant} · "
+            f"{workload.spatial} · {workload.checkpointing}"
         )
-        batches, reference_steps = _batches(campaign, workload, total_vram)
+        if progress is None:
+            print(f"[{workload_index}/{len(campaign.workloads)}] {workload.variant} "
+                  f"{workload.spatial} {workload.checkpointing}", file=sys.stderr)
+        else:
+            progress.emit(ProgressEvent("workload", "workload", message=workload_message))
+            progress.emit(ProgressEvent(
+                "stage_start", "batch-search", message="Batch search · estimating workload"
+            ))
+        batches, reference_steps = _batches(
+            campaign, workload, total_vram, progress=progress
+        )
         shapes = _pointwise_shapes(workload)
         depthwise_shapes = _depthwise_shapes(workload)
+        depthwise_probe_count = sum(
+            1 if direction in ("transpose", "downsample") else 2
+            for direction, *_ in depthwise_shapes
+        )
+        operator_total = len(batches) * (
+            len(shapes) + depthwise_probe_count + 1
+        )
+        operator_completed = 0
+        if progress is not None:
+            progress.emit(ProgressEvent(
+                "stage_start", "operators", total=operator_total,
+                message=workload_message,
+            ))
+
+        def advance(message: str, total: int = operator_total) -> None:
+            nonlocal operator_completed
+            operator_completed += 1
+            if progress is not None:
+                progress.emit(ProgressEvent(
+                    "advance", "operators", completed=operator_completed,
+                    total=total, message=message,
+                ))
+
+        def starting(message: str) -> None:
+            if progress is not None:
+                progress.emit(ProgressEvent(
+                    "item_start", "operators", message=f"running · {message}"
+                ))
+
         for batch in batches:
             batch_measurements: list[Measurement] = []
             for in_channels, out_channels, spatial in shapes:
+                starting(f"batch={batch} pointwise_conv3d/training {spatial}")
                 result = _invoke({
                     "kind": "pointwise", "batch": batch,
                     "in_channels": in_channels, "out_channels": out_channels,
                     "spatial_shape": spatial,
                 })
                 if result.get("status") != "ok":
+                    advance(
+                        f"batch={batch} pointwise_conv3d/training {spatial} · "
+                        f"{result.get('status', 'failed')}"
+                    )
                     continue
-                batch_measurements.append(Measurement(
+                measurement = Measurement(
                     family="pointwise_conv3d", direction="regular", phase="training",
                     implementation="pointwise_gemm_per_sample", batch=batch,
                     spatial_shape=spatial, in_channels=in_channels,
@@ -395,7 +457,16 @@ def run_campaign(campaign: Campaign) -> tuple[Measurement, ...]:
                     parameters=tuple(
                         (str(name), int(value)) for name, value in result["parameters"]
                     ),
-                ))
+                )
+                batch_measurements.append(measurement)
+                choice = "candidate" if candidate_wins(
+                    measurement, campaign.objective
+                ) else "reference"
+                advance(
+                    f"batch={batch} pointwise_conv3d/training {spatial} · "
+                    f"ref={float(result['reference_ms']):.3f} ms · "
+                    f"candidate={float(result['candidate_ms']):.3f} ms → {choice}"
+                )
             for direction, channels, kernel, spatial in depthwise_shapes:
                 phases = (
                     ("backward_weight",) if direction == "transpose"
@@ -403,6 +474,7 @@ def run_campaign(campaign: Campaign) -> tuple[Measurement, ...]:
                     else ("backward_input", "backward_weight")
                 )
                 for phase in phases:
+                    starting(f"batch={batch} depthwise/{direction}/{phase} {spatial}")
                     result = _invoke({
                         "kind": "depthwise", "batch": batch,
                         "in_channels": channels, "kernel_size": kernel,
@@ -410,12 +482,16 @@ def run_campaign(campaign: Campaign) -> tuple[Measurement, ...]:
                         "phase": phase,
                     })
                     if result.get("status") != "ok":
+                        advance(
+                            f"batch={batch} depthwise/{direction}/{phase} {spatial} · "
+                            f"{result.get('status', 'failed')}"
+                        )
                         continue
                     family = (
                         "depthwise_conv_transpose3d"
                         if direction == "transpose" else "depthwise_conv3d"
                     )
-                    batch_measurements.append(Measurement(
+                    measurement = Measurement(
                         family=family, direction=direction, phase=phase,
                         implementation=str(result["implementation"]), batch=batch,
                         spatial_shape=spatial, in_channels=channels,
@@ -429,13 +505,23 @@ def run_campaign(campaign: Campaign) -> tuple[Measurement, ...]:
                         parameters=tuple(
                             (str(name), int(value)) for name, value in result["parameters"]
                         ),
-                    ))
+                    )
+                    batch_measurements.append(measurement)
+                    choice = "candidate" if candidate_wins(
+                        measurement, campaign.objective
+                    ) else "reference"
+                    advance(
+                        f"batch={batch} depthwise/{direction}/{phase} {spatial} · "
+                        f"ref={float(result['reference_ms']):.3f} ms · "
+                        f"candidate={float(result['candidate_ms']):.3f} ms → {choice}"
+                    )
             provisional = synthesize_profile(
                 [*measurements, *batch_measurements],
                 name="campaign-candidate",
                 sm=torch.cuda.get_device_capability(),
                 objective=campaign.objective,
             )
+            starting(f"batch={batch} whole-model validation")
             candidate_step = _invoke({
                 "kind": "model", "batch": batch, "workload": asdict(workload),
                 "compile_mode": campaign.compile_mode,
@@ -445,14 +531,24 @@ def run_campaign(campaign: Campaign) -> tuple[Measurement, ...]:
             accepted = _whole_model_accepts(
                 campaign.objective, reference_step, candidate_step
             )
+            candidate_summary = (
+                f"{float(candidate_step['step_ms']):.3f} ms"
+                if candidate_step.get("status") == "ok" else str(candidate_step.get("status"))
+            )
+            advance(
+                f"batch={batch} whole-model validation · "
+                f"ref={float(reference_step['step_ms']):.3f} ms · "
+                f"candidate={candidate_summary} → {'accepted' if accepted else 'rejected'}"
+            )
             if not accepted:
                 batch_measurements = [
                     replace(item, valid=False) for item in batch_measurements
                 ]
-                print(
-                    f"  batch {batch}: isolated winners rejected by whole-model validation",
-                    file=sys.stderr,
-                )
+                if progress is None:
+                    print(
+                        f"  batch {batch}: isolated winners rejected by whole-model validation",
+                        file=sys.stderr,
+                    )
             measurements.extend(batch_measurements)
     return tuple(measurements)
 

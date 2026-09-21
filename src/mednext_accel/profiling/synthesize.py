@@ -33,7 +33,8 @@ class Measurement:
         return asdict(self)
 
 
-def _wins(item: Measurement, objective: Objective) -> bool:
+def candidate_wins(item: Measurement, objective: Objective) -> bool:
+    """Return whether a validated candidate satisfies the profile objective."""
     if not item.valid or item.reference_ms <= 0 or item.candidate_ms <= 0:
         return False
     if objective == "throughput":
@@ -72,12 +73,17 @@ def synthesize_profile(
     name: str,
     sm: tuple[int, int],
     objective: Objective,
+    environment: dict[str, object] | None = None,
+    compile_mode: str | None = None,
 ) -> OptimizationProfile:
-    winners = sorted((item for item in measurements if _wins(item, objective)), key=lambda item: (
-        item.family, item.direction, item.phase, item.implementation,
-        item.spatial_shape, item.in_channels, item.out_channels, item.dtype,
-        item.checkpointing, item.parameters, item.batch,
-    ))
+    winners = sorted(
+        (item for item in measurements if candidate_wins(item, objective)),
+        key=lambda item: (
+            item.family, item.direction, item.phase, item.implementation,
+            item.spatial_shape, item.in_channels, item.out_channels, item.dtype,
+            item.checkpointing, item.parameters, item.batch,
+        ),
+    )
     groups: list[list[Measurement]] = []
     for item in winners:
         identity = (
@@ -123,8 +129,12 @@ def synthesize_profile(
         "schema_version": 1,
         "profile": {
             "name": name, "target": {"vendor": "nvidia", "sm": list(sm)},
-            "provenance": {"generator": "mednext-accel", "objective": objective,
-                           "measurement_count": len(measurements)},
+            "provenance": {
+                "generator": "mednext-accel", "objective": objective,
+                "measurement_count": len(measurements),
+                **({"environment": environment} if environment is not None else {}),
+                **({"compile_mode": compile_mode} if compile_mode is not None else {}),
+            },
         },
         "defaults": _defaults(), "rules": rules, "overrides": [],
         "measurements": [item.to_primitive() for item in measurements],

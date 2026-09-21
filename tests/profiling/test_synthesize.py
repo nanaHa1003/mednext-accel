@@ -1,4 +1,4 @@
-from mednext_accel.profiling.synthesize import Measurement, synthesize_profile
+from mednext_accel.profiling.synthesize import Measurement, candidate_wins, synthesize_profile
 
 
 def measured(batch: int, reference_ms: float, candidate_ms: float) -> Measurement:
@@ -35,3 +35,8 @@ def test_invalid_candidate_and_memory_objective_choose_safely() -> None:
         [invalid, memory], name="test", sm=(12, 0), objective="memory"
     )
     assert profile.rules[0].batch.minimum == 3
+
+
+def test_reported_winner_uses_the_same_balanced_threshold_as_synthesis() -> None:
+    assert not candidate_wins(measured(2, 100.0, 99.0), "balanced")
+    assert candidate_wins(measured(2, 100.0, 96.0), "balanced")

@@ -4,3 +4,4 @@
 torch
 triton
 PyYAML>=6
+rich>=13

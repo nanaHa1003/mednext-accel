@@ -6,6 +6,7 @@ import argparse
 from collections.abc import Sequence
 
 from .api import profile
+from .progress import create_progress_reporter
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -14,6 +15,10 @@ def _parser() -> argparse.ArgumentParser:
     command = commands.add_parser("profile", help="benchmark this GPU and write one profile")
     command.add_argument("workload", nargs="?", help="optional YAML campaign")
     command.add_argument("--preset", choices=("mednext-v1", "all"))
+    command.add_argument(
+        "--progress", choices=("auto", "plain", "quiet"), default="auto",
+        help="progress display (default: auto; plain when output is redirected)",
+    )
     return parser
 
 
@@ -24,7 +29,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     source = arguments.workload
     if arguments.preset:
         source = {"preset": arguments.preset}
-    result = profile(source)
+    reporter = create_progress_reporter(arguments.progress)
+    try:
+        result = profile(source, progress=reporter)
+    finally:
+        reporter.close()
     print(f"Optimization profile written to {result.output_path}")
     print(f"Recorded {len(result.measurements)} validated measurements")
     return 0

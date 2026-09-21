@@ -200,9 +200,11 @@ mednext-accel profile
 
 The profiler detects the GPU and VRAM, expands small batches densely, searches
 for the largest feasible batch with isolated subprocesses, validates candidate
-forward/backward results, and writes one merged profile. A small YAML campaign
-can restrict variants or input shapes. Model construction and first forward never
-run these benchmarks.
+forward/backward results, and writes one merged profile. It reports batch-search
+status followed by operator progress, elapsed time, and ETA. Hardware, driver,
+Python, PyTorch, CUDA, cuDNN, and Triton versions are embedded in the generated
+profile. A small YAML campaign can restrict variants or input shapes. Model
+construction and first forward never run these benchmarks.
 
 Use `fullgraph=True` when the complete training graph is supported. On RTX 5090,
 `mode="default"` is a good general choice, while
