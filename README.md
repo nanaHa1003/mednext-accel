@@ -190,7 +190,8 @@ Bundled exact-SM rules take priority over generic NVIDIA rules. Unknown NVIDIA
 architectures use the generic profile with one warning. A user profile is still
 applied when its recorded SM differs from the current GPU, also with one warning;
 this supports intentional cross-machine experiments without silently blocking
-them. Approximate implementations require explicit opt-in.
+them. SM89 devices automatically load the measured L40S profile; SM120 devices
+load the RTX 5090 profile. Approximate implementations require explicit opt-in.
 
 Generate one local profile with no workload flags:
 
@@ -247,8 +248,9 @@ report = model.explain_optimization(
 )
 ```
 
-See [optimization and profiling](docs/optimization.md) and the
-[SM120 evidence](docs/benchmarks/sm120-profile.md).
+See [optimization and profiling](docs/optimization.md), the
+[SM89 L40S evidence](docs/benchmarks/sm89-profile.md), and the
+[SM120 RTX 5090 evidence](docs/benchmarks/sm120-profile.md).
 
 ## Export evaluation models
 
@@ -265,9 +267,10 @@ timings, peak allocated/reserved memory, operator table, and Chrome trace.
 Generated output belongs in `artifacts/` and is ignored by Git.
 
 Published RTX 5090 measurements and their limits are retained under
-[`docs/benchmarks/`](docs/benchmarks/). Results are hardware and software
-specific; run `mednext-accel profile` on L40S, RTX A6000, RTX 8000, and other
-architectures to create a matched profile.
+[`docs/benchmarks/`](docs/benchmarks/). The bundled SM89 default is backed by an
+L40S campaign documented there as well. Results are hardware, software, and
+workload specific; run `mednext-accel profile` when the bundled evidence does
+not match the target model shape, checkpoint policy, or execution environment.
 
 CPU correctness, export, and wheel-install tests run in CI on Python 3.10–3.12.
 CUDA kernel correctness and performance tests require a local NVIDIA GPU; run

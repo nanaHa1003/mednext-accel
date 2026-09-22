@@ -22,9 +22,21 @@ rules, then generic family defaults. Unsupported kernel geometry uses a reported
 correctness guard. Unknown batches and shapes always receive a decision.
 
 An external profile records its source SM. A mismatch emits one warning and the
-profile remains active. An unknown NVIDIA SM uses `generic-nvidia`, seeded from
-RTX 5090 measurements, with one warning. This behavior lets users knowingly test
-profiles across machines while keeping the provenance visible.
+profile remains active. SM89 selects the measured L40S profile automatically,
+and SM120 selects the RTX 5090 profile. An unknown NVIDIA SM uses
+`generic-nvidia`, seeded from RTX 5090 measurements, with one warning. This
+behavior lets users knowingly test profiles across machines while keeping the
+provenance visible.
+
+The bundled SM89 evidence covers MedNeXt v1 Base, 128³ input, BF16 training,
+all-expansion checkpointing, and legacy dense batches 1–8 and 10. Its 78 rules
+are guarded by tensor shape, channels, batch, dtype, phase, and checkpoint
+policy. Batch 9 and every nonmatching context use reference PyTorch operators.
+The pointwise evidence is deliberately narrower than the depthwise evidence
+because the legacy campaign's pointwise validator produced false negatives;
+those old outcomes were not relabeled. See the
+[SM89 evidence and limitations](benchmarks/sm89-profile.md) for the exact
+environment, operator-level results, and rerun procedure.
 
 Inspect decisions without allocating the requested input:
 
@@ -94,8 +106,11 @@ actual child attempts (including bisection retries), actual whole-model endpoint
 probes, and the requested references removed by kernel deduplication. Its
 `campaign` object preserves the complete normalized campaign, including batch
 search settings and every workload's model family, variant, shape, dtype,
-phase, checkpoint policy, and channel counts. It omits hostnames and usernames.
-Profiles without `execution` or `campaign` remain valid schema-v1 documents.
+phase, checkpoint policy, and channel counts. New measurements also retain the
+child status, kernel numerical result, whole-model result, validator version,
+per-component relative-L2 and maximum-absolute errors, and a rejection reason.
+Profiles omit hostnames and usernames. Profiles without `execution`, `campaign`,
+or the newer validation diagnostics remain valid schema-v1 documents.
 
 A minimal campaign can narrow the workload:
 
