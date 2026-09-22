@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -163,6 +164,44 @@ def test_synthesized_profile_embeds_environment_in_provenance(monkeypatch) -> No
     workload = generated.provenance["campaign"]["workloads"][0]
     assert workload["model_family"] == "mednext_v1"
     assert workload["variant"] == "base"
+
+
+def test_campaign_synthesis_keeps_adjacent_workload_maxima_as_exact_rules(monkeypatch) -> None:
+    campaign = load_campaign(
+        {
+            "workloads": [
+                {
+                    "variant": "base",
+                    "spatial": [128, 128, 128],
+                    "checkpointing": "none",
+                    "out_channels": 3,
+                },
+                {
+                    "variant": "base",
+                    "spatial": [128, 128, 128],
+                    "checkpointing": "none",
+                    "out_channels": 8,
+                },
+            ]
+        }
+    )
+    first = replace(
+        measured(),
+        batch=2,
+        spatial_shape=(128, 128, 128),
+        checkpointing="none",
+    )
+    second = replace(first, batch=3)
+    monkeypatch.setattr(api.torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(api.torch.cuda, "get_device_capability", lambda: (8, 9))
+
+    generated = api.synthesize_campaign(campaign, (first, second))
+
+    assert [(rule.batch.minimum, rule.batch.maximum) for rule in generated.rules] == [
+        (2, 2),
+        (3, 3),
+    ]
+    assert [rule.confidence for rule in generated.rules] == ["measured", "measured"]
 
 
 def test_campaign_provenance_round_trips_through_json(monkeypatch, tmp_path) -> None:

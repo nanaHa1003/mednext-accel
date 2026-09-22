@@ -144,6 +144,7 @@ def synthesize_profile(
     compile_mode: str | None = None,
     execution: Mapping[str, int] | None = None,
     campaign: Mapping[str, object] | None = None,
+    merge_adjacent_batches: bool = True,
 ) -> OptimizationProfile:
     measurements = reconcile_measurements(measurements)
     winners = sorted(
@@ -190,7 +191,11 @@ def synthesize_profile(
                 previous.checkpointing,
                 previous.parameters,
             )
-            if identity == previous_identity and item.batch == previous.batch + 1:
+            if (
+                merge_adjacent_batches
+                and identity == previous_identity
+                and item.batch == previous.batch + 1
+            ):
                 groups[-1].append(item)
                 continue
         groups.append([item])

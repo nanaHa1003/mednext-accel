@@ -57,6 +57,7 @@ def synthesize_campaign(
         compile_mode=campaign.compile_mode,
         execution=execution,
         campaign=campaign_to_primitive(campaign),
+        merge_adjacent_batches=False,
     )
 
 
