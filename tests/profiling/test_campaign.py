@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from mednext_accel.profiling.batch_search import BatchSearch
-from mednext_accel.profiling.campaign import load_campaign
+from mednext_accel.profiling.campaign import campaign_to_primitive, load_campaign
 
 
 def test_default_campaign_covers_installed_models() -> None:
@@ -47,3 +47,47 @@ def test_obsolete_batch_search_keys_are_rejected(obsolete: str) -> None:
 def test_batch_search_accepts_only_memory_fraction_and_maximum() -> None:
     campaign = load_campaign({"batch_search": {"memory_fraction": 0.8, "maximum": 12}})
     assert campaign.batch_search == BatchSearch(memory_fraction=0.8, maximum=12)
+
+
+def test_campaign_to_primitive_records_every_expanded_workload() -> None:
+    campaign = load_campaign(
+        {
+            "preset": "mednext-v1",
+            "objective": "throughput",
+            "compile_mode": "fullgraph",
+            "batch_search": {"memory_fraction": 0.8, "maximum": 6},
+            "workloads": [
+                {
+                    "variant": "base",
+                    "spatial": [96, 128, 160],
+                    "dtypes": ["bfloat16"],
+                    "phases": ["training"],
+                    "checkpointing": "auto",
+                    "in_channels": 2,
+                    "out_channels": 8,
+                }
+            ],
+        }
+    )
+
+    serialized = campaign_to_primitive(campaign)
+
+    assert serialized == {
+        "preset": "mednext-v1",
+        "objective": "throughput",
+        "compile_mode": "fullgraph",
+        "batch_search": {"memory_fraction": 0.8, "maximum": 6},
+        "workloads": [
+            {
+                "model_family": "mednext_v1",
+                "variant": "base",
+                "spatial": [96, 128, 160],
+                "dtypes": ["bfloat16"],
+                "phases": ["training"],
+                "checkpointing": checkpointing,
+                "in_channels": 2,
+                "out_channels": 8,
+            }
+            for checkpointing in ("none", "all-expansion", "whole-block")
+        ],
+    }

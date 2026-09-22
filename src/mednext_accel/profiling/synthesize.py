@@ -143,6 +143,7 @@ def synthesize_profile(
     environment: dict[str, object] | None = None,
     compile_mode: str | None = None,
     execution: Mapping[str, int] | None = None,
+    campaign: Mapping[str, object] | None = None,
 ) -> OptimizationProfile:
     measurements = reconcile_measurements(measurements)
     winners = sorted(
@@ -231,6 +232,7 @@ def synthesize_profile(
                     **({"environment": environment} if environment is not None else {}),
                     **({"compile_mode": compile_mode} if compile_mode is not None else {}),
                     **({"execution": dict(execution)} if execution is not None else {}),
+                    **({"campaign": dict(campaign)} if campaign is not None else {}),
                 },
             },
             "defaults": _defaults(),

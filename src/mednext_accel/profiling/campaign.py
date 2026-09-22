@@ -40,6 +40,33 @@ class Campaign:
 CampaignSource = str | PathLike[str] | Mapping[str, object] | Campaign
 
 
+def campaign_to_primitive(campaign: Campaign) -> dict[str, object]:
+    """Return the complete, JSON-compatible identity of a profiling campaign."""
+
+    return {
+        "preset": campaign.preset,
+        "objective": campaign.objective,
+        "compile_mode": campaign.compile_mode,
+        "batch_search": {
+            "memory_fraction": campaign.batch_search.memory_fraction,
+            "maximum": campaign.batch_search.maximum,
+        },
+        "workloads": [
+            {
+                "model_family": workload.model_family,
+                "variant": workload.variant,
+                "spatial": list(workload.spatial),
+                "dtypes": list(workload.dtypes),
+                "phases": list(workload.phases),
+                "checkpointing": workload.checkpointing,
+                "in_channels": workload.in_channels,
+                "out_channels": workload.out_channels,
+            }
+            for workload in campaign.workloads
+        ],
+    }
+
+
 def _default_workloads() -> tuple[Workload, ...]:
     return tuple(Workload("mednext_v1", variant, (128, 128, 128)) for variant in _VARIANTS)
 

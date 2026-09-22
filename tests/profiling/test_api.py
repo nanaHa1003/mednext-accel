@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from mednext_accel.optimization.profiles import load_profile
 from mednext_accel.optimization.schema import OptimizationProfile
 from mednext_accel.profiling import api, cli, runner
 from mednext_accel.profiling.campaign import load_campaign
@@ -135,7 +136,22 @@ def test_profile_reports_the_complete_environment_summary(monkeypatch, tmp_path)
 
 
 def test_synthesized_profile_embeds_environment_in_provenance(monkeypatch) -> None:
-    campaign = load_campaign(None)
+    campaign = load_campaign(
+        {
+            "preset": "mednext-v1",
+            "objective": "balanced",
+            "batch_search": {"memory_fraction": 0.85, "maximum": 4},
+            "workloads": [
+                {
+                    "variant": "base",
+                    "spatial": [128, 128, 128],
+                    "checkpointing": "none",
+                    "in_channels": 1,
+                    "out_channels": 3,
+                }
+            ],
+        }
+    )
     environment = {"gpu": {"name": "NVIDIA L40S", "sm": [8, 9]}}
     monkeypatch.setattr(api.torch.cuda, "is_available", lambda: True)
     monkeypatch.setattr(api.torch.cuda, "get_device_capability", lambda: (8, 9))
@@ -143,6 +159,40 @@ def test_synthesized_profile_embeds_environment_in_provenance(monkeypatch) -> No
 
     assert generated.provenance["environment"]["gpu"]["name"] == "NVIDIA L40S"
     assert generated.provenance["compile_mode"] == "max-autotune-no-cudagraphs"
+    assert generated.provenance["campaign"]["preset"] == "mednext-v1"
+    workload = generated.provenance["campaign"]["workloads"][0]
+    assert workload["model_family"] == "mednext_v1"
+    assert workload["variant"] == "base"
+
+
+def test_campaign_provenance_round_trips_through_json(monkeypatch, tmp_path) -> None:
+    campaign = load_campaign(
+        {
+            "workloads": [
+                {
+                    "variant": "base",
+                    "spatial": [128, 128, 128],
+                    "checkpointing": "auto",
+                }
+            ]
+        }
+    )
+    monkeypatch.setattr(api.torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(api.torch.cuda, "get_device_capability", lambda: (8, 9))
+    generated = api.synthesize_campaign(campaign, ())
+
+    destination = api.write_profile_atomic(tmp_path / "profile.json", generated)
+    raw = json.loads(destination.read_text())
+    loaded = load_profile(destination)
+
+    raw_campaign = raw["profile"]["provenance"]["campaign"]
+    assert raw_campaign["workloads"][0]["spatial"] == [128, 128, 128]
+    assert [item["checkpointing"] for item in raw_campaign["workloads"]] == [
+        "none",
+        "all-expansion",
+        "whole-block",
+    ]
+    assert loaded.provenance["campaign"]["workloads"][0]["spatial"] == (128, 128, 128)
 
 
 def test_profiling_result_preserves_three_argument_constructor(tmp_path) -> None:
