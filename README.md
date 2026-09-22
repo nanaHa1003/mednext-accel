@@ -199,6 +199,42 @@ Generate one local profile with no workload flags:
 mednext-accel profile
 ```
 
+For a reproducible campaign, save the configuration as YAML and pass its path
+to the same command. This example profiles MedNeXt Base at 128³ with one
+checkpointing policy and an explicit batch upper bound:
+
+```yaml
+# mednext-base-128.yaml
+preset: mednext-v1
+objective: balanced
+compile_mode: max-autotune-no-cudagraphs
+
+batch_search:
+  memory_fraction: 0.90
+  maximum: 16
+
+workloads:
+  - variant: base
+    spatial: [128, 128, 128]
+    in_channels: 1
+    out_channels: 3
+    dtypes: [bfloat16]
+    phases: [training]
+    checkpointing: all-expansion
+```
+
+```bash
+mednext-accel profile mednext-base-128.yaml
+```
+
+`variant` accepts `small`, `base`, `medium`, or `large`. `checkpointing`
+accepts `none`, `all-expansion`, `whole-block`, or `auto`; `auto` expands the
+workload into all three policies. `objective` accepts `balanced`, `throughput`,
+or `memory`. Profiling currently supports BF16. A supplied positive `maximum`
+is tested first; omit it to discover the upper bound with exponential growth
+and binary refinement. `memory_fraction` determines how much of total GPU VRAM
+a successful model probe may consume before it is treated as infeasible.
+
 The profiler detects the GPU and VRAM, searches for the largest feasible batch
 with isolated subprocesses, profiles kernels only at that selected batch,
 validates candidate forward/backward results, and writes one merged profile. A
