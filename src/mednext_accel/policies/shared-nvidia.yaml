@@ -1,0 +1,44 @@
+# Cross-SM hypotheses, not an exact-batch measurement table. Work boundaries
+# follow the smallest supported legacy observations. B9 and larger batches infer
+# from work, while 128^3/16^3 regular dW remain excluded due counterexamples.
+# Only the stem is a shared pointwise winner (SM86 B12, SM89 B1/B10, SM120 B2/4/6).
+# Aggregate A6000 policy rejection does not invalidate its kernel evidence.
+version: 2
+kind: mednext-accel-policy
+name: shared-nvidia
+target: {vendor: nvidia}
+scope: {dtype: bfloat16, checkpointing: all-expansion}
+evidence:
+- {id: rtx-a6000-b12, sha256: b94e423468b0ee5839fe09a62d6e160fb6739fbcb0c909ab53b10c3640464fae}
+- {id: l40s-b10, sha256: fffa74b383d74e2bcc01e1edc189c5d01249aea7d10c6dd7cd595b836b5d538e}
+- {id: legacy-l40s-policy, sha256: a84d04d432e396cbc779b0a364387aa7ff964f8b0ab9d3dd61c8fa1f4799d668}
+- {id: legacy-rtx5090-policy, sha256: d33cf9e7ea50575de8e48d3ed8a1793054ad2459e0f5d61314660ac258746c1b}
+rules:
+  - id: stem
+    when: {family: pointwise_conv3d, direction: regular, spatial_shape: [128, 128, 128], channels: [1, 32], batch: {min: 1}}
+    use: {training: {implementation: pointwise_gemm_per_sample}}
+    confidence: validated-cross-sm
+  - id: downsample-dx
+    when: {family: depthwise_conv3d, direction: downsample, kernel_size: [3, 3, 3], work: {min: 1000000}}
+    use: {backward_input: {implementation: triton_downsample_dx, parameters: auto}}
+    confidence: validated-cross-sm
+  - id: regular-dx
+    when: {family: depthwise_conv3d, direction: regular, kernel_size: [3, 3, 3], work: {min: 1500000}}
+    use: {backward_input: {implementation: triton_depthwise_dx, parameters: auto}}
+    confidence: validated-cross-sm
+  - id: transpose-dw
+    when: {family: depthwise_conv_transpose3d, direction: transpose, kernel_size: [3, 3, 3], reduction_work: {min: 4096}}
+    use: {backward_weight: {implementation: triton_transpose_split_dw, parameters: auto}}
+    confidence: validated-cross-sm
+  - id: regular-dw-64
+    when: {family: depthwise_conv3d, direction: regular, kernel_size: [3, 3, 3], spatial_shape: [64, 64, 64], channels: [64, 64], batch: {min: 1}}
+    use: {backward_weight: {implementation: triton_split_dw, parameters: auto}}
+    confidence: validated-cross-sm
+  - id: regular-dw-32
+    when: {family: depthwise_conv3d, direction: regular, kernel_size: [3, 3, 3], spatial_shape: [32, 32, 32], channels: [128, 128], batch: {min: 1}}
+    use: {backward_weight: {implementation: triton_split_dw, parameters: auto}}
+    confidence: validated-cross-sm
+  - id: regular-dw-8
+    when: {family: depthwise_conv3d, direction: regular, kernel_size: [3, 3, 3], spatial_shape: [8, 8, 8], channels: [512, 512], reduction_work: {min: 1024}}
+    use: {backward_weight: {implementation: triton_split_dw, parameters: auto}}
+    confidence: validated-cross-sm

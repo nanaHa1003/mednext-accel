@@ -48,3 +48,27 @@ def test_cases_are_grouped_into_five_categories_per_batch() -> None:
         "transpose-dw",
     }
     assert all(len({case.key.batch for case in group.cases}) == 1 for group in groups)
+
+
+def test_profiling_launch_recipe_uses_all_spatial_dimensions():
+    from mednext_accel.profiling.matrix import depthwise_parameters
+
+    assert dict(depthwise_parameters("regular", "backward_weight", 5, (16, 32, 32))) == {
+        "dw_splits": 2,
+        "dw_block": 512,
+    }
+
+
+def test_execution_sm_selects_architecture_recipe_in_kernel_plan():
+    from mednext_accel.profiling.matrix import build_workload_cases
+
+    workload = Workload("mednext_v1", "base", (128, 128, 128))
+    cases = build_workload_cases(
+        workload,
+        (3,),
+        pointwise_shapes=(),
+        depthwise_shapes=(("regular", 128, 3, (32, 32, 32)),),
+        sm=(12, 0),
+    )
+    dw = next(case for case in cases if case.key.phase == "backward_weight")
+    assert dict(dw.key.parameters) == {"dw_splits": 6, "dw_block": 1024}

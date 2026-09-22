@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field, replace
 from typing import Literal
 
-from ..optimization.schema import OptimizationProfile, parse_profile
+from ..optimization.policy import OptimizationPolicy, parse_policy
 from .matrix import KernelCase
 
 Objective = Literal["balanced", "throughput", "memory"]
@@ -105,7 +105,7 @@ def candidate_wins(item: Measurement, objective: Objective) -> bool:
 
 
 def reconcile_measurements(measurements: Sequence[Measurement]) -> tuple[Measurement, ...]:
-    """Invalidate candidates that schema-v1 rules cannot distinguish from a rejection.
+    """Invalidate candidates that policy rules cannot distinguish from a rejection.
 
     The identity includes exactly the emitted match fields plus family, direction,
     and phase. Implementation and launch parameters select a candidate; they do not
@@ -133,33 +133,12 @@ def reconcile_measurements(measurements: Sequence[Measurement]) -> tuple[Measure
             item,
             valid=False,
             rejection_reason=item.rejection_reason
-            or "schema-v1 reconciliation rejected an indistinguishable rule context",
+            or "policy reconciliation rejected an indistinguishable rule context",
         )
         if item.valid and identity(item) in rejected
         else item
         for item in measurements
     )
-
-
-def _defaults() -> dict[str, dict[str, dict[str, object]]]:
-    phases = (
-        "training",
-        "inference",
-        "export",
-        "backward_input",
-        "backward_weight",
-        "backward_bias",
-    )
-    return {
-        family: {phase: {"implementation": "reference", "parameters": {}} for phase in phases}
-        for family in (
-            "pointwise_conv3d",
-            "depthwise_conv3d",
-            "depthwise_conv_transpose3d",
-            "group_norm",
-            "gelu",
-        )
-    }
 
 
 def synthesize_profile(
@@ -173,7 +152,7 @@ def synthesize_profile(
     execution: Mapping[str, int] | None = None,
     campaign: Mapping[str, object] | None = None,
     merge_adjacent_batches: bool = True,
-) -> OptimizationProfile:
+) -> OptimizationPolicy:
     measurements = reconcile_measurements(measurements)
     winners = sorted(
         (item for item in measurements if candidate_wins(item, objective)),
@@ -233,44 +212,34 @@ def synthesize_profile(
         rules.append(
             {
                 "id": f"generated-{index:04d}",
-                "family": first.family,
-                "direction": first.direction,
-                "match": {
+                "when": {
+                    "family": first.family,
+                    "direction": first.direction,
                     "batch": {"min": first.batch, "max": last.batch},
                     "spatial_shape": list(first.spatial_shape),
-                    "in_channels": first.in_channels,
-                    "out_channels": first.out_channels,
+                    "channels": [first.in_channels, first.out_channels],
                     "dtype": first.dtype,
                     "checkpointing": first.checkpointing,
                 },
-                "phases": {
+                "use": {
                     first.phase: {
                         "implementation": first.implementation,
                         "parameters": dict(first.parameters),
                     }
                 },
-                "confidence": "measured" if len(group) == 1 else "interpolated",
+                "confidence": "measured-exact-context"
+                if len(group) == 1
+                else "interpolated-bounded",
             }
         )
-    return parse_profile(
+    # Runtime documents contain only dispatch. The measurements remain on the
+    # campaign result pending the separate evidence artifact integration.
+    return parse_policy(
         {
-            "schema_version": 1,
-            "profile": {
-                "name": name,
-                "target": {"vendor": "nvidia", "sm": list(sm)},
-                "provenance": {
-                    "generator": "mednext-accel",
-                    "objective": objective,
-                    "measurement_count": len(measurements),
-                    **({"environment": environment} if environment is not None else {}),
-                    **({"compile_mode": compile_mode} if compile_mode is not None else {}),
-                    **({"execution": dict(execution)} if execution is not None else {}),
-                    **({"campaign": dict(campaign)} if campaign is not None else {}),
-                },
-            },
-            "defaults": _defaults(),
+            "version": 2,
+            "kind": "mednext-accel-policy",
+            "name": name,
+            "target": {"vendor": "nvidia", "sm": list(sm)},
             "rules": rules,
-            "overrides": [],
-            "measurements": [item.to_primitive() for item in measurements],
         }
     )

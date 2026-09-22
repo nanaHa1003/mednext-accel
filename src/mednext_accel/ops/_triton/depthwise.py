@@ -520,17 +520,43 @@ def depthwise_conv3d_regular(
     dw_splits: int,
     dw_block: int,
     dx_block: int,
+    custom_dx: bool = True,
+    custom_dw: bool = True,
 ) -> torch.Tensor:
     return torch.nn.functional.conv3d(x, weight, bias, padding=kernel_size // 2, groups=channels)
 
 
 @depthwise_conv3d_regular.register_fake
-def _(x, weight, bias, kernel_size, channels, spatial_size, dw_splits, dw_block, dx_block):
+def _(
+    x,
+    weight,
+    bias,
+    kernel_size,
+    channels,
+    spatial_size,
+    dw_splits,
+    dw_block,
+    dx_block,
+    custom_dx=True,
+    custom_dw=True,
+):
     return torch.empty_like(x)
 
 
 def _setup_regular_context(ctx, inputs, output):
-    x, weight, bias, kernel_size, channels, spatial_size, dw_splits, dw_block, dx_block = inputs
+    (
+        x,
+        weight,
+        bias,
+        kernel_size,
+        channels,
+        spatial_size,
+        dw_splits,
+        dw_block,
+        dx_block,
+        custom_dx,
+        custom_dw,
+    ) = inputs
     ctx.save_for_backward(x, weight)
     ctx.has_bias = bias is not None
     ctx.kernel_size = kernel_size
@@ -539,34 +565,50 @@ def _setup_regular_context(ctx, inputs, output):
     ctx.dw_splits = dw_splits
     ctx.dw_block = dw_block
     ctx.dx_block = dx_block
+    ctx.custom_dx = custom_dx
+    ctx.custom_dw = custom_dw
 
 
 def _regular_backward(ctx, grad_output):
     x, weight = ctx.saved_tensors
     grad_output = grad_output.contiguous()
-    grad_input = depthwise_input_grad_regular(
-        grad_output, weight, ctx.kernel_size, ctx.channels, ctx.spatial_size, ctx.dx_block
-    )
-    grad_weight = depthwise_weight_grad_regular(
-        x, grad_output, ctx.kernel_size, ctx.channels, ctx.spatial_size, ctx.dw_splits, ctx.dw_block
-    )
-    grad_bias = None
-    if ctx.has_bias:
+    need_dx, need_dw, need_db = ctx.needs_input_grad[:3]
+    native_mask = [
+        need_dx and not ctx.custom_dx,
+        need_dw and not ctx.custom_dw,
+        need_db and ctx.has_bias,
+    ]
+    grad_input = grad_weight = grad_bias = None
+    if any(native_mask):
         padding = ctx.kernel_size // 2
-        _, _, grad_bias = torch.ops.aten.convolution_backward(
+        grad_input, grad_weight, grad_bias = torch.ops.aten.convolution_backward(
             grad_output,
             x,
             weight,
-            [ctx.channels],
+            [ctx.channels] if ctx.has_bias else None,
             [1, 1, 1],
             [padding, padding, padding],
             [1, 1, 1],
             False,
             [0, 0, 0],
             ctx.channels,
-            [False, False, True],
+            native_mask,
         )
-    return grad_input, grad_weight, grad_bias, None, None, None, None, None, None
+    if need_dx and ctx.custom_dx:
+        grad_input = depthwise_input_grad_regular(
+            grad_output, weight, ctx.kernel_size, ctx.channels, ctx.spatial_size, ctx.dx_block
+        )
+    if need_dw and ctx.custom_dw:
+        grad_weight = depthwise_weight_grad_regular(
+            x,
+            grad_output,
+            ctx.kernel_size,
+            ctx.channels,
+            ctx.spatial_size,
+            ctx.dw_splits,
+            ctx.dw_block,
+        )
+    return grad_input, grad_weight, grad_bias, None, None, None, None, None, None, None, None
 
 
 depthwise_conv3d_regular.register_autograd(_regular_backward, setup_context=_setup_regular_context)

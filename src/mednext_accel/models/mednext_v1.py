@@ -20,7 +20,7 @@ from ..ops.adaptive import (
     execution_context_for_shape,
     install_adaptive_operators,
 )
-from ..optimization.profiles import ProfileRegistry
+from ..optimization.policies import PolicyRegistry
 from ..optimization.report import OptimizationReport
 from .blocks import MedNeXtBlock, MedNeXtDownBlock, MedNeXtUpBlock, OutputHead
 from .config import MedNeXtV1Config, get_mednext_v1_config
@@ -253,7 +253,7 @@ class MedNeXtV1(nn.Module):
             training=self.training,
         )
         if resolver is None:
-            return OptimizationReport("reference", context, ())
+            return OptimizationReport(("reference",), context, ())
         decisions = []
         for module in self.modules():
             module_context = replace(
@@ -275,7 +275,7 @@ class MedNeXtV1(nn.Module):
             )
         )
         return OptimizationReport(
-            resolver.profiles[0].name,
+            tuple(policy.name for policy in resolver.context_layers(context)) or ("reference",),
             context,
             tuple(decisions),
             report_warnings,
@@ -359,8 +359,7 @@ def _configure_optimization(model: MedNeXtV1, optimization: OptimizationSource) 
     ):
         raise ValueError(f"optimization={optimization!r} was removed; use 'auto' or 'reference'")
     external = None if optimization == "auto" else optimization
-    sm = torch.cuda.get_device_capability() if torch.cuda.is_available() else None
-    resolver = ProfileRegistry(external=external).resolver_for(sm=sm)
+    resolver = PolicyRegistry(external=external).resolver()
     model_context = ModelOptimizationContext(
         "mednext_v1",
         model.config.variant,

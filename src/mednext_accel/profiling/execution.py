@@ -80,6 +80,7 @@ def build_execution_plan(
     discover: Callable[[Workload], WorkloadShapes],
     search: Callable[[Workload], WorkloadBatchSelection],
     progress: ProgressReporter | None = None,
+    sm: tuple[int, int] | None = None,
 ) -> ExecutionPlan:
     """Discover, search, and globally deduplicate a campaign's kernel cases."""
 
@@ -94,6 +95,7 @@ def build_execution_plan(
                     (1,),
                     pointwise_shapes=shapes.pointwise,
                     depthwise_shapes=shapes.depthwise,
+                    sm=sm,
                 )
                 for workload, shapes in discovered
             )
@@ -120,6 +122,7 @@ def build_execution_plan(
             result.batches,
             pointwise_shapes=shapes.pointwise,
             depthwise_shapes=shapes.depthwise,
+            sm=sm,
         )
         for workload, shapes, result in searched
     )

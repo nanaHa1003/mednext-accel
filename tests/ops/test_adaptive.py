@@ -10,11 +10,11 @@ from mednext_accel.ops.adaptive import (
     ModelOptimizationContext,
     install_adaptive_operators,
 )
-from mednext_accel.optimization.profiles import ProfileRegistry
+from mednext_accel.optimization.policies import PolicyRegistry
 
 
 def _resolver():
-    return ProfileRegistry().resolver_for(sm=(12, 0))
+    return PolicyRegistry().resolver()
 
 
 def test_installation_preserves_parameters_and_state_dict_keys() -> None:

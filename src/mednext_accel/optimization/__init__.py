@@ -1,6 +1,17 @@
-"""Profile-driven operator selection."""
+"""Compact policy-driven operator selection."""
 
-from .profiles import ProfileRegistry, load_profile
-from .report import Decision, OptimizationReport
+from .policies import PolicyRegistry, load_bundled_policy
+from .policy import OptimizationPolicy
+from .policy_io import load_policy
+from .policy_resolver import PolicyDecision, PolicyResolver
+from .report import OptimizationReport
 
-__all__ = ["Decision", "OptimizationReport", "ProfileRegistry", "load_profile"]
+__all__ = [
+    "OptimizationPolicy",
+    "OptimizationReport",
+    "PolicyDecision",
+    "PolicyRegistry",
+    "PolicyResolver",
+    "load_bundled_policy",
+    "load_policy",
+]

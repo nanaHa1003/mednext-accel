@@ -6,6 +6,8 @@ import hashlib
 import json
 from dataclasses import asdict, dataclass
 
+from ..optimization.descriptors import ExecutionContext, OperatorDescriptor
+from ..optimization.parameters import parameter_defaults
 from .campaign import Workload
 
 
@@ -42,16 +44,49 @@ class KernelGroup:
 
 
 def depthwise_parameters(
-    direction: str, phase: str, batch: int, spatial: tuple[int, int, int]
+    direction: str,
+    phase: str,
+    batch: int,
+    spatial: tuple[int, int, int],
+    *,
+    channels: int = 1,
+    kernel_size: int = 3,
+    sm: tuple[int, int] | None = None,
 ) -> tuple[tuple[str, int], ...]:
-    """Default launch parameters for planning and legacy single-case requests."""
-    if direction in ("regular", "downsample") and phase == "backward_input":
-        return (("dx_block", 128),)
-    if direction in ("regular", "transpose") and phase == "backward_weight":
-        anchor = 128 if direction == "regular" else 64
-        splits = max(1, min(512, round(64 * batch * spatial[0] ** 3 / anchor**3)))
-        return (("dw_splits", splits), ("dw_block", 512))
-    raise ValueError(f"unsupported depthwise probe {direction}/{phase}")
+    """Use the same Python launch recipe as runtime for the execution SM."""
+    implementations = {
+        ("regular", "backward_input"): "triton_depthwise_dx",
+        ("downsample", "backward_input"): "triton_downsample_dx",
+        ("regular", "backward_weight"): "triton_split_dw",
+        ("transpose", "backward_weight"): "triton_transpose_split_dw",
+    }
+    implementation = implementations.get((direction, phase))
+    if implementation is None:
+        raise ValueError(f"unsupported depthwise probe {direction}/{phase}")
+    descriptor = OperatorDescriptor(
+        "depthwise_conv_transpose3d" if direction == "transpose" else "depthwise_conv3d",
+        direction,
+        channels,
+        channels,
+        (kernel_size,) * 3,
+        (1 if direction == "regular" else 2,) * 3,
+        (kernel_size // 2,) * 3,
+        (1,) * 3,
+        channels,
+    )
+    context = ExecutionContext(
+        "training",
+        "cuda",
+        sm,
+        0,
+        "bfloat16",
+        batch,
+        spatial,
+        "mednext_v1",
+        "base",
+        "none",
+    )
+    return tuple(parameter_defaults(implementation, descriptor, context).items())
 
 
 def _case(
@@ -91,6 +126,7 @@ def build_workload_cases(
     *,
     pointwise_shapes: tuple[tuple[int, int, tuple[int, int, int]], ...],
     depthwise_shapes: tuple[tuple[str, int, int, tuple[int, int, int]], ...],
+    sm: tuple[int, int] | None = None,
 ) -> tuple[KernelCase, ...]:
     """Build the isolated operator cases discovered for one workload.
 
@@ -131,7 +167,13 @@ def build_workload_cases(
                             dtype=dtype,
                             implementation="triton_depthwise_dx",
                             parameters=depthwise_parameters(
-                                direction, "backward_input", batch, spatial
+                                direction,
+                                "backward_input",
+                                batch,
+                                spatial,
+                                channels=channels,
+                                kernel_size=kernel_size,
+                                sm=sm,
                             ),
                         )
                     )
@@ -148,7 +190,13 @@ def build_workload_cases(
                             dtype=dtype,
                             implementation="triton_split_dw",
                             parameters=depthwise_parameters(
-                                direction, "backward_weight", batch, spatial
+                                direction,
+                                "backward_weight",
+                                batch,
+                                spatial,
+                                channels=channels,
+                                kernel_size=kernel_size,
+                                sm=sm,
                             ),
                         )
                     )
@@ -166,7 +214,13 @@ def build_workload_cases(
                             dtype=dtype,
                             implementation="triton_downsample_dx",
                             parameters=depthwise_parameters(
-                                direction, "backward_input", batch, spatial
+                                direction,
+                                "backward_input",
+                                batch,
+                                spatial,
+                                channels=channels,
+                                kernel_size=kernel_size,
+                                sm=sm,
                             ),
                         )
                     )
@@ -184,7 +238,13 @@ def build_workload_cases(
                             dtype=dtype,
                             implementation="triton_transpose_split_dw",
                             parameters=depthwise_parameters(
-                                direction, "backward_weight", batch, spatial
+                                direction,
+                                "backward_weight",
+                                batch,
+                                spatial,
+                                channels=channels,
+                                kernel_size=kernel_size,
+                                sm=sm,
                             ),
                         )
                     )

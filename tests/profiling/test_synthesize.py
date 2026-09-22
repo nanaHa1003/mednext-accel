@@ -2,7 +2,12 @@ from dataclasses import replace
 
 import pytest
 
-from mednext_accel.profiling.synthesize import Measurement, candidate_wins, synthesize_profile
+from mednext_accel.profiling.synthesize import (
+    Measurement,
+    candidate_wins,
+    reconcile_measurements,
+    synthesize_profile,
+)
 
 
 def measured(batch: int, reference_ms: float, candidate_ms: float) -> Measurement:
@@ -33,9 +38,9 @@ def test_adjacent_batches_with_same_winner_merge_into_interval() -> None:
         objective="balanced",
     )
     assert len(profile.rules) == 1
-    assert profile.rules[0].batch.minimum == 2
-    assert profile.rules[0].batch.maximum == 4
-    assert profile.rules[0].phases["training"].implementation == "pointwise_gemm_per_sample"
+    assert profile.rules[0].when["batch"].minimum == 2
+    assert profile.rules[0].when["batch"].maximum == 4
+    assert profile.rules[0].use["training"].implementation == "pointwise_gemm_per_sample"
 
 
 def test_invalid_candidate_and_memory_objective_choose_safely() -> None:
@@ -50,7 +55,7 @@ def test_invalid_candidate_and_memory_objective_choose_safely() -> None:
         }
     )
     profile = synthesize_profile([invalid, memory], name="test", sm=(12, 0), objective="memory")
-    assert profile.rules[0].batch.minimum == 3
+    assert profile.rules[0].when["batch"].minimum == 3
 
 
 def test_reported_winner_uses_the_same_balanced_threshold_as_synthesis() -> None:
@@ -71,7 +76,7 @@ def test_invalid_rule_match_blocks_other_selections_for_the_same_match(selection
     )
 
     assert profile.rules == ()
-    assert all(not item["valid"] for item in profile.measurements)
+    assert all(not item.valid for item in reconcile_measurements([candidate, rejected]))
 
 
 @pytest.mark.parametrize(
@@ -97,25 +102,7 @@ def test_invalid_rule_match_preserves_distinguishable_candidate(different_match)
     )
 
     assert len(profile.rules) == 1
-    assert profile.measurements[0]["valid"] is True
-
-
-def test_synthesize_profile_records_deduplicated_execution_counts() -> None:
-    execution = {
-        "kernel_case_count": 192,
-        "kernel_group_count": 20,
-        "whole_model_validation_count": 2,
-        "deduplicated_reference_count": 384,
-    }
-    profile = synthesize_profile(
-        (),
-        name="sm89-local",
-        sm=(8, 9),
-        objective="balanced",
-        execution=execution,
-    )
-
-    assert profile.provenance["execution"] == execution
+    assert reconcile_measurements([candidate, rejected])[0].valid is True
 
 
 def test_raw_result_materialization_restores_context_and_uses_planned_identity():
@@ -170,12 +157,11 @@ def test_single_selected_batch_produces_only_an_exact_batch_rule() -> None:
     )
 
     assert len(profile.rules) == 1
-    assert profile.rules[0].batch.minimum == profile.rules[0].batch.maximum == 13
-    assert [item["batch"] for item in profile.measurements] == [13]
+    assert profile.rules[0].when["batch"].minimum == profile.rules[0].when["batch"].maximum == 13
 
 
 def test_measurement_serializes_probe_and_numerical_diagnostics():
-    from mednext_accel.optimization.schema import parse_profile, profile_to_primitive
+    from mednext_accel.optimization.policy import parse_policy, policy_to_primitive
     from mednext_accel.profiling.matrix import KernelCase, KernelCaseKey
     from mednext_accel.profiling.synthesize import measurement_from_result
 
@@ -213,9 +199,9 @@ def test_measurement_serializes_probe_and_numerical_diagnostics():
     assert data["validation_metrics"] == metrics
     assert data["rejection_reason"] == raw["rejection_reason"]
     profile = synthesize_profile([item], name="diagnostic", sm=(8, 9), objective="balanced")
-    roundtrip = parse_profile(profile_to_primitive(profile))
-    assert roundtrip.measurements[0] == profile.measurements[0]
-    assert roundtrip.measurements[0]["kernel_valid"] is False
+    roundtrip = parse_policy(policy_to_primitive(profile))
+    assert roundtrip.rules == ()
+    assert item.to_primitive()["kernel_valid"] is False
 
     failure = measurement_from_result(
         case, {"status": "oom", "message": "CUDA out of memory"}, checkpointing="none"
@@ -247,7 +233,7 @@ def test_serialized_reconciliation_explains_rejection_and_preserves_prior_eviden
 ):
     import json
 
-    from mednext_accel.optimization.schema import parse_profile, profile_to_primitive
+    from mednext_accel.optimization.policy import parse_policy, policy_to_primitive
 
     candidate = replace(measured(2, 4.0, 1.0), whole_model_valid=True)
     rejected = replace(
@@ -260,15 +246,17 @@ def test_serialized_reconciliation_explains_rejection_and_preserves_prior_eviden
     profile = synthesize_profile(
         [candidate, rejected], name="conflicting-contexts", sm=(12, 0), objective="balanced"
     )
-    serialized = json.loads(json.dumps(profile_to_primitive(profile)))
-    roundtrip = parse_profile(serialized)
-    accepted_kernel, original_rejection = roundtrip.measurements
+    serialized = json.loads(json.dumps(policy_to_primitive(profile)))
+    roundtrip = parse_policy(serialized)
+    accepted_kernel, original_rejection = (
+        item.to_primitive() for item in reconcile_measurements([candidate, rejected])
+    )
 
     assert accepted_kernel["kernel_valid"] is True
     assert accepted_kernel["whole_model_valid"] is True
     assert accepted_kernel["valid"] is False
     assert accepted_kernel["rejection_reason"] == (
-        "schema-v1 reconciliation rejected an indistinguishable rule context"
+        "policy reconciliation rejected an indistinguishable rule context"
     )
     assert original_rejection["kernel_valid"] is kernel_valid
     assert original_rejection["whole_model_valid"] is whole_model_valid

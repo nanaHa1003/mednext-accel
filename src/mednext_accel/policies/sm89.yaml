@@ -1,0 +1,40 @@
+# L40S dense legacy summary + new B10 kernel evidence. Regular 128^3 dW
+# interpolates B1..10, including B9; 16^3 is bounded B1..8 with an exact B10
+# tombstone (0.649x). No inference crosses that counterexample.
+# The three B10 pointwise winners satisfy balanced time AND memory limits.
+# The two validator OOMs remain gaps. No GPU product identity is claimed.
+version: 2
+kind: mednext-accel-policy
+name: sm89
+target:
+  vendor: nvidia
+  sm: [8, 9]
+scope: {dtype: bfloat16, checkpointing: all-expansion}
+evidence:
+- {id: l40s-b10, sha256: fffa74b383d74e2bcc01e1edc189c5d01249aea7d10c6dd7cd595b836b5d538e}
+- {id: legacy-l40s-policy, sha256: a84d04d432e396cbc779b0a364387aa7ff964f8b0ab9d3dd61c8fa1f4799d668}
+rules:
+  - id: regular-dw-16-b10-counterexample
+    when: {family: depthwise_conv3d, direction: regular, kernel_size: [3, 3, 3], spatial_shape: [16, 16, 16], channels: [256, 256], batch: 10}
+    use: {backward_weight: {implementation: reference}}
+    confidence: measured-exact-context
+  - id: regular-dw-16-b1-b8
+    when: {family: depthwise_conv3d, direction: regular, kernel_size: [3, 3, 3], spatial_shape: [16, 16, 16], channels: [256, 256], batch: {min: 1, max: 8}}
+    use: {backward_weight: {implementation: triton_split_dw, parameters: auto}}
+    confidence: interpolated-bounded
+  - id: regular-dw-128-b1-b10
+    when: {family: depthwise_conv3d, direction: regular, kernel_size: [3, 3, 3], spatial_shape: [128, 128, 128], channels: [32, 32], batch: {min: 1, max: 10}}
+    use: {backward_weight: {implementation: triton_split_dw, parameters: auto}}
+    confidence: interpolated-bounded
+  - id: pointwise-b10-1-32-128
+    when: {family: pointwise_conv3d, direction: regular, spatial_shape: [128, 128, 128], channels: [1, 32], batch: 10}
+    use: {training: {implementation: pointwise_gemm_per_sample}}
+    confidence: measured-exact-context
+  - id: pointwise-b10-64-32-128
+    when: {family: pointwise_conv3d, direction: regular, spatial_shape: [128, 128, 128], channels: [64, 32], batch: 10}
+    use: {training: {implementation: pointwise_gemm_per_sample}}
+    confidence: measured-exact-context
+  - id: pointwise-b10-128-384-63
+    when: {family: pointwise_conv3d, direction: regular, spatial_shape: [63, 63, 63], channels: [128, 384], batch: 10}
+    use: {training: {implementation: pointwise_gemm_per_sample}}
+    confidence: measured-exact-context

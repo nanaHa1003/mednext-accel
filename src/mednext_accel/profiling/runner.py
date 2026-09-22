@@ -9,7 +9,7 @@ import sys
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 
-from ..optimization.schema import profile_to_primitive
+from ..optimization.policy import policy_to_primitive
 from .batch_search import ProbeResult, search_batches
 from .benchmark import run_json_subprocess
 from .campaign import Campaign, Workload
@@ -176,7 +176,15 @@ def _depthwise_probe(payload: dict[str, object]) -> dict[str, object]:
     parameters = (
         tuple((name, int(value)) for name, value in payload["parameters"])
         if "parameters" in payload
-        else depthwise_parameters(direction, phase, batch, spatial)
+        else depthwise_parameters(
+            direction,
+            phase,
+            batch,
+            spatial,
+            channels=channels,
+            kernel_size=kernel,
+            sm=torch.cuda.get_device_capability(),
+        )
     )
     launch = dict(parameters)
     stride = 2 if direction in ("downsample", "transpose") else 1
@@ -585,7 +593,11 @@ def execute_campaign(campaign: Campaign, progress: ProgressReporter | None = Non
         return WorkloadBatchSelection(batches, reference_steps)
 
     plan = build_execution_plan(
-        campaign, discover=discover_workload_shapes, search=search, progress=progress
+        campaign,
+        sm=torch.cuda.get_device_capability(),
+        discover=discover_workload_shapes,
+        search=search,
+        progress=progress,
     )
     raw_results: dict[str, dict[str, object]] = {}
     group_attempts = 0
@@ -687,7 +699,7 @@ def execute_campaign(campaign: Campaign, progress: ProgressReporter | None = Non
                     "batch": batch,
                     "workload": asdict(workload),
                     "compile_mode": campaign.compile_mode,
-                    "optimization": profile_to_primitive(provisional),
+                    "optimization": policy_to_primitive(provisional),
                 }
             )
             validation_count += 1

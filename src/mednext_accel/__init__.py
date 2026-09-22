@@ -11,21 +11,22 @@ from .models import (
     mednext_medium,
     mednext_small,
 )
-from .optimization import Decision, OptimizationReport, load_profile
+from .optimization import OptimizationPolicy, OptimizationReport, PolicyDecision, load_policy
 
 __all__ = [
     "CheckpointConfig",
     "MedNeXtV1",
     "MedNeXtV1Config",
     "OptimizationSource",
-    "Decision",
+    "OptimizationPolicy",
+    "PolicyDecision",
     "OptimizationReport",
     "get_mednext_v1_config",
     "mednext_base",
     "mednext_large",
     "mednext_medium",
     "mednext_small",
-    "load_profile",
+    "load_policy",
 ]
 
 __version__ = "0.1.0a0"

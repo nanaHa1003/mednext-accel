@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 import torch
 
-from ..optimization.schema import OptimizationProfile, profile_to_primitive
+from ..optimization.policy import OptimizationPolicy, policy_to_primitive
 from .campaign import Campaign, CampaignSource, campaign_to_primitive, load_campaign
 from .environment import collect_environment
 from .execution import validate_campaign_dtypes
@@ -44,7 +44,7 @@ def synthesize_campaign(
     measurements: tuple[Measurement, ...],
     environment: dict[str, object] | None = None,
     execution: Mapping[str, int] | None = None,
-) -> OptimizationProfile:
+) -> OptimizationPolicy:
     if not torch.cuda.is_available():
         raise RuntimeError("profiling requires an NVIDIA CUDA device")
     sm = torch.cuda.get_device_capability()
@@ -61,16 +61,16 @@ def synthesize_campaign(
     )
 
 
-def default_profile_path(profile: OptimizationProfile) -> Path:
+def default_profile_path(profile: OptimizationPolicy) -> Path:
     root = os.environ.get("XDG_CACHE_HOME")
     cache = Path(root) if root else Path.home() / ".cache"
     return cache / "mednext_accel" / "profiles" / f"{profile.name}.json"
 
 
-def write_profile_atomic(path: str | PathLike[str], profile: OptimizationProfile) -> Path:
+def write_profile_atomic(path: str | PathLike[str], profile: OptimizationPolicy) -> Path:
     destination = Path(path).expanduser()
     destination.parent.mkdir(parents=True, exist_ok=True)
-    document = json.dumps(profile_to_primitive(profile), indent=2, sort_keys=True) + "\n"
+    document = json.dumps(policy_to_primitive(profile), indent=2, sort_keys=True) + "\n"
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{destination.name}.", dir=destination.parent, text=True
     )
@@ -91,7 +91,7 @@ def write_profile_atomic(path: str | PathLike[str], profile: OptimizationProfile
 
 @dataclass(frozen=True, slots=True)
 class ProfilingResult:
-    profile: OptimizationProfile
+    profile: OptimizationPolicy
     measurements: tuple[Measurement, ...]
     output_path: Path
     environment: dict[str, object] = field(default_factory=dict)

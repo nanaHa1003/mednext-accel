@@ -4,7 +4,7 @@ from dataclasses import replace
 import pytest
 
 from mednext_accel.optimization.descriptors import ExecutionContext, OperatorDescriptor
-from mednext_accel.optimization.resolver import OptimizationResolver
+from mednext_accel.optimization.policy_resolver import PolicyResolver
 from mednext_accel.profiling import runner
 from mednext_accel.profiling.batch_search import BatchSearch
 from mednext_accel.profiling.batch_search import BatchSearchResult as BoundarySearchResult
@@ -311,8 +311,8 @@ def test_campaign_shares_groups_and_materializes_each_checkpoint_context(monkeyp
             context = payload["workload"]["checkpointing"]
             validations[context].append(payload["batch"])
             profile = payload["optimization"]
-            assert {m["checkpointing"] for m in profile["measurements"]} == {context}
-            assert len(profile["measurements"]) == 5
+            assert {r["when"]["checkpointing"] for r in profile["rules"]} == {context}
+            assert len(profile["rules"]) == 5
             return {"status": "ok", "step_ms": 8.0, "peak_bytes": 100}
         return _successful_group(payload)
 
@@ -441,8 +441,8 @@ def test_variants_validate_independently_against_their_own_reference(monkeypatch
                 payload["batch"],
             )
         )
-        assert all(m["valid"] for m in payload["optimization"]["measurements"])
-        assert len(payload["optimization"]["measurements"]) == 1
+        assert payload["optimization"]["version"] == 2
+        assert len(payload["optimization"]["rules"]) == 1
         return {"status": "ok", "step_ms": 8.0, "peak_bytes": 100}
 
     monkeypatch.setattr(runner, "_invoke", invoke)
@@ -457,7 +457,7 @@ def test_variants_validate_independently_against_their_own_reference(monkeypatch
     assert run.statistics.requested_case_count == 3
 
     profile = synthesize_profile(run.measurements, name="final", sm=(8, 9), objective="balanced")
-    resolver = OptimizationResolver([profile])
+    resolver = PolicyResolver(external=profile)
     descriptor = OperatorDescriptor(
         "pointwise_conv3d", "regular", 32, 64, (1, 1, 1), (1, 1, 1), (0, 0, 0), (1, 1, 1), 1
     )
@@ -661,7 +661,7 @@ def test_campaign_profiles_and_validates_only_each_contexts_selected_maximum(mon
         batch = payload["batch"]
         if "optimization" in payload:
             validations[context].append(batch)
-            assert {m["batch"] for m in payload["optimization"]["measurements"]} == {batch}
+            assert {r["when"]["batch"] for r in payload["optimization"]["rules"]} == {batch}
             return {"status": "ok", "step_ms": 8.0, "peak_bytes": 100}
         references[context].append(batch)
         if context == "none" and batch > 3:
@@ -680,4 +680,7 @@ def test_campaign_profiles_and_validates_only_each_contexts_selected_maximum(mon
     ]
     assert run.statistics.whole_model_validation_count == 2
     profile = synthesize_profile(run.measurements, name="final", sm=(8, 9), objective="balanced")
-    assert {(rule.batch.minimum, rule.batch.maximum) for rule in profile.rules} == {(3, 3), (5, 5)}
+    assert {(rule.when["batch"].minimum, rule.when["batch"].maximum) for rule in profile.rules} == {
+        (3, 3),
+        (5, 5),
+    }

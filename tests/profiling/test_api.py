@@ -3,8 +3,8 @@ from dataclasses import replace
 
 import pytest
 
-from mednext_accel.optimization.profiles import load_profile
-from mednext_accel.optimization.schema import OptimizationProfile
+from mednext_accel.optimization.policy import OptimizationPolicy
+from mednext_accel.optimization.policy_io import load_policy
 from mednext_accel.profiling import api, cli, runner
 from mednext_accel.profiling.campaign import load_campaign
 from mednext_accel.profiling.runner import CampaignRun, ExecutionStatistics
@@ -31,7 +31,7 @@ def measured() -> Measurement:
     )
 
 
-def test_profile_saves_measurements_environment_and_execution_atomically(
+def test_profile_saves_runtime_policy_atomically_and_keeps_measurements_on_result(
     monkeypatch, tmp_path
 ) -> None:
     environment = {
@@ -57,15 +57,10 @@ def test_profile_saves_measurements_environment_and_execution_atomically(
 
     assert result.output_path.exists()
     saved = json.loads(result.output_path.read_text())
-    assert saved["profile"]["name"] == "sm120-local"
-    assert saved["profile"]["provenance"]["environment"] == environment
-    assert saved["profile"]["provenance"]["execution"] == {
-        "kernel_case_count": 192,
-        "kernel_group_count": 20,
-        "whole_model_validation_count": 2,
-        "deduplicated_reference_count": 384,
-    }
-    assert saved["measurements"][0]["family"] == "pointwise_conv3d"
+    assert saved["name"] == "sm120-local"
+    assert saved["version"] == 2
+    assert "measurements" not in saved and "defaults" not in saved
+    assert load_policy(result.output_path) == result.profile
     assert result.measurements == campaign_run.measurements
     assert result.environment == environment
 
@@ -136,36 +131,6 @@ def test_profile_reports_the_complete_environment_summary(monkeypatch, tmp_path)
     assert str(tmp_path / "profile.json") in reporter.events[1].message
 
 
-def test_synthesized_profile_embeds_environment_in_provenance(monkeypatch) -> None:
-    campaign = load_campaign(
-        {
-            "preset": "mednext-v1",
-            "objective": "balanced",
-            "batch_search": {"memory_fraction": 0.85, "maximum": 4},
-            "workloads": [
-                {
-                    "variant": "base",
-                    "spatial": [128, 128, 128],
-                    "checkpointing": "none",
-                    "in_channels": 1,
-                    "out_channels": 3,
-                }
-            ],
-        }
-    )
-    environment = {"gpu": {"name": "NVIDIA L40S", "sm": [8, 9]}}
-    monkeypatch.setattr(api.torch.cuda, "is_available", lambda: True)
-    monkeypatch.setattr(api.torch.cuda, "get_device_capability", lambda: (8, 9))
-    generated = api.synthesize_campaign(campaign, (), environment=environment)
-
-    assert generated.provenance["environment"]["gpu"]["name"] == "NVIDIA L40S"
-    assert generated.provenance["compile_mode"] == "max-autotune-no-cudagraphs"
-    assert generated.provenance["campaign"]["preset"] == "mednext-v1"
-    workload = generated.provenance["campaign"]["workloads"][0]
-    assert workload["model_family"] == "mednext_v1"
-    assert workload["variant"] == "base"
-
-
 def test_campaign_synthesis_keeps_adjacent_workload_maxima_as_exact_rules(monkeypatch) -> None:
     campaign = load_campaign(
         {
@@ -197,45 +162,29 @@ def test_campaign_synthesis_keeps_adjacent_workload_maxima_as_exact_rules(monkey
 
     generated = api.synthesize_campaign(campaign, (first, second))
 
-    assert [(rule.batch.minimum, rule.batch.maximum) for rule in generated.rules] == [
+    assert [
+        (rule.when["batch"].minimum, rule.when["batch"].maximum) for rule in generated.rules
+    ] == [
         (2, 2),
         (3, 3),
     ]
-    assert [rule.confidence for rule in generated.rules] == ["measured", "measured"]
+    assert [rule.confidence for rule in generated.rules] == [
+        "measured-exact-context",
+        "measured-exact-context",
+    ]
 
 
-def test_campaign_provenance_round_trips_through_json(monkeypatch, tmp_path) -> None:
-    campaign = load_campaign(
-        {
-            "workloads": [
-                {
-                    "variant": "base",
-                    "spatial": [128, 128, 128],
-                    "checkpointing": "auto",
-                }
-            ]
-        }
-    )
+def test_generated_policy_round_trips_through_json(monkeypatch, tmp_path) -> None:
+    campaign = load_campaign(None)
     monkeypatch.setattr(api.torch.cuda, "is_available", lambda: True)
     monkeypatch.setattr(api.torch.cuda, "get_device_capability", lambda: (8, 9))
-    generated = api.synthesize_campaign(campaign, ())
-
-    destination = api.write_profile_atomic(tmp_path / "profile.json", generated)
-    raw = json.loads(destination.read_text())
-    loaded = load_profile(destination)
-
-    raw_campaign = raw["profile"]["provenance"]["campaign"]
-    assert raw_campaign["workloads"][0]["spatial"] == [128, 128, 128]
-    assert [item["checkpointing"] for item in raw_campaign["workloads"]] == [
-        "none",
-        "all-expansion",
-        "whole-block",
-    ]
-    assert loaded.provenance["campaign"]["workloads"][0]["spatial"] == (128, 128, 128)
+    generated = api.synthesize_campaign(campaign, (measured(),))
+    destination = api.write_profile_atomic(tmp_path / "policy.json", generated)
+    assert load_policy(destination) == generated
 
 
 def test_profiling_result_preserves_three_argument_constructor(tmp_path) -> None:
-    generated: OptimizationProfile = synthesize_profile(
+    generated: OptimizationPolicy = synthesize_profile(
         [], name="test", sm=(8, 9), objective="balanced"
     )
     result = api.ProfilingResult(generated, (), tmp_path / "profile.json")

@@ -1,0 +1,170 @@
+# RTX 5090 supported shapes. Structural depthwise scaling remains unbounded
+# in batch so larger same-SM devices receive useful defaults. Recipes live in
+# Python; only C128/32^3 B4/B6 change launch parameters relative to the recipe.
+# Non-stem pointwise common shapes are bounded B2..6, other intervals retain
+# their legacy bounds. VRAM-only pointwise extrapolations are deliberately removed.
+# Nine confidence-only dW overrides and one shadowed pointwise row are omitted.
+version: 2
+kind: mednext-accel-policy
+name: sm120
+target:
+  vendor: nvidia
+  sm: [12, 0]
+scope: {dtype: bfloat16}
+evidence:
+- {id: legacy-rtx5090-policy, sha256: d33cf9e7ea50575de8e48d3ed8a1793054ad2459e0f5d61314660ac258746c1b}
+rules:
+  - id: dw-split-b4-128-32
+    when: {family: depthwise_conv3d, direction: regular, kernel_size: [3, 3, 3], batch: 4, spatial_shape: [32, 32, 32], channels: [128, 128]}
+    use: {backward_weight: {implementation: triton_split_dw, parameters: {dw_splits: 4}}}
+    confidence: measured-exact-context
+  - id: dw-split-b6-128-32
+    when: {family: depthwise_conv3d, direction: regular, kernel_size: [3, 3, 3], batch: 6, spatial_shape: [32, 32, 32], channels: [128, 128]}
+    use: {backward_weight: {implementation: triton_split_dw, parameters: {dw_splits: 8}}}
+    confidence: measured-exact-context
+  - id: pw-common-1
+    when: {family: pointwise_conv3d, direction: regular, spatial_shape: [128, 128, 128], channels: [32, 3], batch: {min: 2, max: 6}}
+    use: {training: {implementation: pointwise_gemm_per_sample}}
+    confidence: interpolated-bounded
+  - id: pw-common-2
+    when: {family: pointwise_conv3d, direction: regular, spatial_shape: [64, 64, 64], channels: [32, 96], batch: {min: 2, max: 6}}
+    use: {training: {implementation: pointwise_gemm_per_sample}}
+    confidence: interpolated-bounded
+  - id: pw-common-3
+    when: {family: pointwise_conv3d, direction: regular, spatial_shape: [64, 64, 64], channels: [64, 32], batch: {min: 2, max: 6}}
+    use: {training: {implementation: pointwise_gemm_per_sample}}
+    confidence: interpolated-bounded
+  - id: pw-common-4
+    when: {family: pointwise_conv3d, direction: regular, spatial_shape: [64, 64, 64], channels: [64, 128], batch: {min: 2, max: 6}}
+    use: {training: {implementation: pointwise_gemm_per_sample}}
+    confidence: interpolated-bounded
+  - id: pw-common-5
+    when: {family: pointwise_conv3d, direction: regular, spatial_shape: [32, 32, 32], channels: [64, 256], batch: {min: 2, max: 6}}
+    use: {training: {implementation: pointwise_gemm_per_sample}}
+    confidence: interpolated-bounded
+  - id: pw-common-6
+    when: {family: pointwise_conv3d, direction: regular, spatial_shape: [64, 64, 64], channels: [96, 64], batch: {min: 2, max: 6}}
+    use: {training: {implementation: pointwise_gemm_per_sample}}
+    confidence: interpolated-bounded
+  - id: pw-common-7
+    when: {family: pointwise_conv3d, direction: regular, spatial_shape: [32, 32, 32], channels: [128, 256], batch: {min: 2, max: 6}}
+    use: {training: {implementation: pointwise_gemm_per_sample}}
+    confidence: interpolated-bounded
+  - id: pw-common-8
+    when: {family: pointwise_conv3d, direction: regular, spatial_shape: [32, 32, 32], channels: [128, 512], batch: {min: 2, max: 6}}
+    use: {training: {implementation: pointwise_gemm_per_sample}}
+    confidence: interpolated-bounded
+  - id: pw-common-9
+    when: {family: pointwise_conv3d, direction: regular, spatial_shape: [64, 64, 64], channels: [192, 64], batch: {min: 2, max: 6}}
+    use: {training: {implementation: pointwise_gemm_per_sample}}
+    confidence: interpolated-bounded
+  - id: pw-common-10
+    when: {family: pointwise_conv3d, direction: regular, spatial_shape: [32, 32, 32], channels: [256, 128], batch: {min: 2, max: 6}}
+    use: {training: {implementation: pointwise_gemm_per_sample}}
+    confidence: interpolated-bounded
+  - id: pw-common-11
+    when: {family: pointwise_conv3d, direction: regular, spatial_shape: [16, 16, 16], channels: [256, 512], batch: {min: 2, max: 6}}
+    use: {training: {implementation: pointwise_gemm_per_sample}}
+    confidence: interpolated-bounded
+  - id: pw-common-12
+    when: {family: pointwise_conv3d, direction: regular, spatial_shape: [63, 63, 63], channels: [384, 64], batch: {min: 2, max: 6}}
+    use: {training: {implementation: pointwise_gemm_per_sample}}
+    confidence: interpolated-bounded
+  - id: pw-common-13
+    when: {family: pointwise_conv3d, direction: regular, spatial_shape: [32, 32, 32], channels: [512, 128], batch: {min: 2, max: 6}}
+    use: {training: {implementation: pointwise_gemm_per_sample}}
+    confidence: interpolated-bounded
+  - id: pw-common-14
+    when: {family: pointwise_conv3d, direction: regular, spatial_shape: [16, 16, 16], channels: [512, 256], batch: {min: 2, max: 6}}
+    use: {training: {implementation: pointwise_gemm_per_sample}}
+    confidence: interpolated-bounded
+  - id: pw-b2-b4-0
+    when: {family: pointwise_conv3d, direction: regular, spatial_shape: [128, 128, 128], channels: [32, 64], batch: {min: 2, max: 4}}
+    use: {training: {implementation: pointwise_gemm_per_sample}}
+    confidence: interpolated-bounded
+  - id: pw-b2-b4-1
+    when: {family: pointwise_conv3d, direction: regular, spatial_shape: [128, 128, 128], channels: [64, 32], batch: {min: 2, max: 4}}
+    use: {training: {implementation: pointwise_gemm_per_sample}}
+    confidence: interpolated-bounded
+  - id: pw-b2-b4-2
+    when: {family: pointwise_conv3d, direction: regular, spatial_shape: [64, 64, 64], channels: [64, 192], batch: {min: 2, max: 4}}
+    use: {training: {implementation: pointwise_gemm_per_sample}}
+    confidence: interpolated-bounded
+  - id: pw-b2-b4-3
+    when: {family: pointwise_conv3d, direction: regular, spatial_shape: [127, 127, 127], channels: [128, 32], batch: {min: 2, max: 4}}
+    use: {training: {implementation: pointwise_gemm_per_sample}}
+    confidence: interpolated-bounded
+  - id: pw-b2-b4-4
+    when: {family: pointwise_conv3d, direction: regular, spatial_shape: [16, 16, 16], channels: [256, 1024], batch: {min: 2, max: 4}}
+    use: {training: {implementation: pointwise_gemm_per_sample}}
+    confidence: interpolated-bounded
+  - id: pw-b2-b4-5
+    when: {family: pointwise_conv3d, direction: regular, spatial_shape: [8, 8, 8], channels: [512, 2048], batch: {min: 2, max: 4}}
+    use: {training: {implementation: pointwise_gemm_per_sample}}
+    confidence: interpolated-bounded
+  - id: pw-b2-b4-6
+    when: {family: pointwise_conv3d, direction: regular, spatial_shape: [16, 16, 16], channels: [1024, 256], batch: {min: 2, max: 4}}
+    use: {training: {implementation: pointwise_gemm_per_sample}}
+    confidence: interpolated-bounded
+  - id: pw-b2-b4-7
+    when: {family: pointwise_conv3d, direction: regular, spatial_shape: [8, 8, 8], channels: [2048, 512], batch: {min: 2, max: 4}}
+    use: {training: {implementation: pointwise_gemm_per_sample}}
+    confidence: interpolated-bounded
+  - id: pw-b2-0
+    when: {family: pointwise_conv3d, direction: regular, spatial_shape: [32, 32, 32], channels: [128, 64], batch: {min: 2, max: 2}}
+    use: {training: {implementation: pointwise_gemm_per_sample}}
+    confidence: measured-exact-context
+  - id: pw-b2-1
+    when: {family: pointwise_conv3d, direction: regular, spatial_shape: [63, 63, 63], channels: [128, 384], batch: {min: 2, max: 2}}
+    use: {training: {implementation: pointwise_gemm_per_sample}}
+    confidence: measured-exact-context
+  - id: pw-b2-3
+    when: {family: pointwise_conv3d, direction: regular, spatial_shape: [15, 15, 15], channels: [512, 2048], batch: {min: 2, max: 2}}
+    use: {training: {implementation: pointwise_gemm_per_sample}}
+    confidence: measured-exact-context
+  - id: pw-b4-0
+    when: {family: pointwise_conv3d, direction: regular, spatial_shape: [31, 31, 31], channels: [256, 1024], batch: {min: 4, max: 4}}
+    use: {training: {implementation: pointwise_gemm_per_sample}}
+    confidence: measured-exact-context
+  - id: pw-b4-1
+    when: {family: pointwise_conv3d, direction: regular, spatial_shape: [31, 31, 31], channels: [1024, 128], batch: {min: 4, max: 4}}
+    use: {training: {implementation: pointwise_gemm_per_sample}}
+    confidence: measured-exact-context
+  - id: pw-b6-0
+    when: {family: pointwise_conv3d, direction: regular, spatial_shape: [63, 63, 63], channels: [128, 384], batch: {min: 6, max: 6}}
+    use: {training: {implementation: pointwise_gemm_per_sample}}
+    confidence: measured-exact-context
+  - id: pw-b6-1
+    when: {family: pointwise_conv3d, direction: regular, spatial_shape: [31, 31, 31], channels: [256, 1024], batch: {min: 6, max: 6}}
+    use: {training: {implementation: pointwise_gemm_per_sample}}
+    confidence: measured-exact-context
+  - id: dw-regular-32-128
+    when: {family: depthwise_conv3d, direction: regular, spatial_shape: [128, 128, 128], channels: [32, 32], batch: {min: 1}, kernel_size: [3, 3, 3]}
+    use: {backward_input: {implementation: triton_depthwise_dx, parameters: auto}, backward_weight: {implementation: triton_split_dw, parameters: auto}}
+    confidence: inferred-same-sm
+  - id: dw-regular-64-64
+    when: {family: depthwise_conv3d, direction: regular, spatial_shape: [64, 64, 64], channels: [64, 64], batch: {min: 1}, kernel_size: [3, 3, 3]}
+    use: {backward_input: {implementation: triton_depthwise_dx, parameters: auto}, backward_weight: {implementation: triton_split_dw, parameters: auto}}
+    confidence: inferred-same-sm
+  - id: dw-regular-128-32
+    when: {family: depthwise_conv3d, direction: regular, spatial_shape: [32, 32, 32], channels: [128, 128], batch: {min: 1}, kernel_size: [3, 3, 3]}
+    use: {backward_input: {implementation: triton_depthwise_dx, parameters: auto}, backward_weight: {implementation: triton_split_dw, parameters: auto}}
+    confidence: inferred-same-sm
+  - id: dw-regular-256-16
+    when: {family: depthwise_conv3d, direction: regular, spatial_shape: [16, 16, 16], channels: [256, 256], batch: {min: 1}, kernel_size: [3, 3, 3]}
+    use: {backward_input: {implementation: triton_depthwise_dx, parameters: auto}, backward_weight: {implementation: triton_split_dw, parameters: auto}}
+    confidence: inferred-same-sm
+  - id: dw-regular-512-8
+    when: {family: depthwise_conv3d, direction: regular, spatial_shape: [8, 8, 8], channels: [512, 512], batch: {min: 1}, kernel_size: [3, 3, 3]}
+    use: {backward_input: {implementation: triton_depthwise_dx, parameters: auto}, backward_weight: {implementation: triton_split_dw, parameters: auto}}
+    confidence: inferred-same-sm
+  - id: dw-transpose-64-64
+    when: {family: depthwise_conv_transpose3d, direction: transpose, spatial_shape: [64, 64, 64], channels: [64, 64], batch: {min: 1}, kernel_size: [3, 3, 3]}
+    use: {backward_weight: {implementation: triton_transpose_split_dw, parameters: auto}}
+    confidence: inferred-same-sm
+  # Retain the stem's legacy checkpoint-independent SM120 scope. The shared
+  # stem policy additionally covers B1 with all-expansion checkpointing.
+  - id: stem-checkpoint-independent
+    when: {family: pointwise_conv3d, direction: regular, spatial_shape: [128, 128, 128], channels: [1, 32], batch: {min: 2}}
+    use: {training: {implementation: pointwise_gemm_per_sample}}
+    confidence: inferred-same-sm

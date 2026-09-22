@@ -9,8 +9,7 @@ from torch import Tensor, nn
 from torch.nn import functional as F
 
 from ..optimization.descriptors import ExecutionContext, OperatorDescriptor
-from ..optimization.report import Decision
-from ..optimization.resolver import OptimizationResolver
+from ..optimization.policy_resolver import PolicyDecision, PolicyResolver
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,7 +66,9 @@ def _context_from_tensor(
         model_context,
         batch_size=batch,
         spatial_shape=tuple(int(size) for size in x.shape[-3:]),
-        dtype=x.dtype,
+        dtype=torch.get_autocast_dtype(x.device.type)
+        if torch.is_autocast_enabled(x.device.type) and x.dtype != torch.float64
+        else x.dtype,
         device_type=x.device.type,
         sm=sm,
         total_vram_bytes=total_vram,
@@ -109,7 +110,7 @@ class AdaptivePointwise3d(nn.Module):
     def __init__(
         self,
         conv: nn.Conv3d,
-        resolver: OptimizationResolver,
+        resolver: PolicyResolver,
         model_context: ModelOptimizationContext,
         *,
         role: str | None = None,
@@ -138,7 +139,7 @@ class AdaptivePointwise3d(nn.Module):
         device_type: str,
         sm: tuple[int, int] | None,
         total_vram_bytes: int,
-    ) -> Decision:
+    ) -> PolicyDecision:
         context = execution_context_for_shape(
             self.model_context,
             batch_size=batch_size,
@@ -181,7 +182,7 @@ class AdaptiveDepthwise3d(nn.Module):
     def __init__(
         self,
         conv: nn.Conv3d | nn.ConvTranspose3d,
-        resolver: OptimizationResolver,
+        resolver: PolicyResolver,
         model_context: ModelOptimizationContext,
         *,
         role: str | None = None,
@@ -235,17 +236,21 @@ class AdaptiveDepthwise3d(nn.Module):
             or context.device_type != "cuda"
             or not torch.is_grad_enabled()
             or x.ndim != 5
+            or self.output_padding != (0, 0, 0)
             or not x.is_contiguous()
             or tuple(x.shape[2:]) != (x.shape[2],) * 3
         ):
             return self._reference(x)
         dx = self.resolver.resolve(self.descriptor, context, "backward_input")
         dw = self.resolver.resolve(self.descriptor, context, "backward_weight")
+        if dx.implementation == dw.implementation == "reference":
+            return self._reference(x)
         try:
             from ._triton import depthwise as backend
         except (ImportError, AttributeError):
             return self._reference(x)
 
+        x = x.to(getattr(torch, context.dtype))
         weight = self.weight.to(x.dtype)
         bias = self.bias.to(x.dtype) if self.bias is not None else None
         size = int(x.shape[2])
@@ -271,10 +276,8 @@ class AdaptiveDepthwise3d(nn.Module):
                 size,
                 int(dx.parameters.get("dx_block", 128)),
             )
-        if (
-            self.stride == (1, 1, 1)
-            and dx.implementation == "triton_depthwise_dx"
-            and dw.implementation == "triton_split_dw"
+        if self.stride == (1, 1, 1) and (
+            dx.implementation == "triton_depthwise_dx" or dw.implementation == "triton_split_dw"
         ):
             return backend.depthwise_conv3d_regular(
                 x,
@@ -285,7 +288,9 @@ class AdaptiveDepthwise3d(nn.Module):
                 size,
                 int(dw.parameters.get("dw_splits", 8)),
                 int(dw.parameters.get("dw_block", 256)),
-                int(dx.parameters.get("dx_block", 256)),
+                int(dx.parameters.get("dx_block", 128)),
+                dx.implementation == "triton_depthwise_dx",
+                dw.implementation == "triton_split_dw",
             )
         return self._reference(x)
 
@@ -321,7 +326,7 @@ def _depthwise_eligible(module: nn.Module) -> bool:
 def install_adaptive_operators(
     model: nn.Module,
     *,
-    resolver: OptimizationResolver,
+    resolver: PolicyResolver,
     model_context: ModelOptimizationContext,
     _prefix: str = "",
 ) -> int:
