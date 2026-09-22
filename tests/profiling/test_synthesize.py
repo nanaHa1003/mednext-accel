@@ -162,3 +162,13 @@ def test_raw_result_materialization_restores_context_and_uses_planned_identity()
         assert not item.valid
         assert item.reference_ms == item.candidate_ms == 0.0
         assert item.reference_peak_bytes == item.candidate_peak_bytes == 0
+
+
+def test_single_selected_batch_produces_only_an_exact_batch_rule() -> None:
+    profile = synthesize_profile(
+        [measured(13, 10.0, 8.0)], name="selected", sm=(12, 0), objective="balanced"
+    )
+
+    assert len(profile.rules) == 1
+    assert profile.rules[0].batch.minimum == profile.rules[0].batch.maximum == 13
+    assert [item["batch"] for item in profile.measurements] == [13]

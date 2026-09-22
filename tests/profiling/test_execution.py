@@ -5,7 +5,7 @@ import pytest
 from mednext_accel.profiling.batch_search import BatchSearch
 from mednext_accel.profiling.campaign import Campaign, Workload
 from mednext_accel.profiling.execution import (
-    BatchSearchResult,
+    WorkloadBatchSelection,
     WorkloadShapes,
     build_execution_plan,
     deduplicate_workloads,
@@ -28,8 +28,7 @@ def test_duplicate_workloads_search_once() -> None:
         campaign,
         discover=lambda workload: shapes,
         search=lambda workload: (
-            calls.append(workload)
-            or BatchSearchResult((1, 2), {1: reference_step(), 2: reference_step()})
+            calls.append(workload) or WorkloadBatchSelection((2,), {2: reference_step()})
         ),
     )
     assert len(calls) == 1
@@ -49,8 +48,7 @@ def test_checkpoint_workloads_search_separately_but_share_kernel_cases() -> None
         campaign,
         discover=lambda workload: shapes,
         search=lambda workload: (
-            searches.append(workload)
-            or BatchSearchResult((1, 2), {1: reference_step(), 2: reference_step()})
+            searches.append(workload) or WorkloadBatchSelection((2,), {2: reference_step()})
         ),
     )
     assert searches == [none, expansion]
@@ -60,7 +58,7 @@ def test_checkpoint_workloads_search_separately_but_share_kernel_cases() -> None
     assert plan.requested_case_count == sum(len(run.case_keys) for run in plan.workloads)
     assert plan.requested_case_count == 2 * len(plan.kernel_cases)
     assert plan.workloads[0].shapes is shapes
-    assert plan.workloads[0].reference_steps[1] == reference_step()
+    assert plan.workloads[0].reference_steps[2] == reference_step()
 
 
 def test_planning_discovers_every_shape_before_batch_search() -> None:
@@ -73,7 +71,9 @@ def test_planning_discovers_every_shape_before_batch_search() -> None:
     plan = build_execution_plan(
         campaign,
         discover=lambda workload: events.append(("discover", workload)) or shapes,
-        search=lambda workload: events.append(("search", workload)) or BatchSearchResult((), {}),
+        search=lambda workload: (
+            events.append(("search", workload)) or WorkloadBatchSelection((), {})
+        ),
     )
 
     assert deduplicate_workloads(campaign.workloads) == (first, second)
@@ -100,7 +100,45 @@ def test_plan_rejects_unsupported_dtypes_before_any_discovery_or_search(dtypes):
         build_execution_plan(
             campaign,
             discover=lambda workload: callbacks.append("discover") or WorkloadShapes((), ()),
-            search=lambda workload: callbacks.append("search") or BatchSearchResult((), {}),
+            search=lambda workload: callbacks.append("search") or WorkloadBatchSelection((), {}),
         )
 
     assert callbacks == []
+
+
+@pytest.mark.parametrize(
+    ("batches", "reference_steps", "message"),
+    [
+        ((1, 2), {1: reference_step(), 2: reference_step()}, "at most one batch"),
+        ((3,), {}, "reference steps must match"),
+        ((), {3: reference_step()}, "reference steps must match"),
+        ((3,), {5: reference_step()}, "reference steps must match"),
+    ],
+)
+def test_workload_batch_selection_rejects_ambiguous_or_mismatched_references(
+    batches, reference_steps, message
+):
+    with pytest.raises(ValueError, match=message):
+        WorkloadBatchSelection(batches, reference_steps)
+
+
+def test_workload_maxima_are_the_only_planned_batches() -> None:
+    none = Workload("mednext_v1", "base", (128, 128, 128), checkpointing="none")
+    expansion = replace(none, checkpointing="all-expansion")
+    campaign = Campaign("mednext-v1", (none, expansion), BatchSearch(maximum=5))
+    shapes = WorkloadShapes(((32, 64, (128, 128, 128)),), ())
+    selections = {
+        "none": WorkloadBatchSelection((3,), {3: reference_step()}),
+        "all-expansion": WorkloadBatchSelection((5,), {5: reference_step()}),
+    }
+
+    plan = build_execution_plan(
+        campaign,
+        discover=lambda workload: shapes,
+        search=lambda workload: selections[workload.checkpointing],
+    )
+
+    assert {case.key.batch for case in plan.kernel_cases} == {3, 5}
+    assert [run.batches for run in plan.workloads] == [(3,), (5,)]
+    assert [set(run.reference_steps) for run in plan.workloads] == [{3}, {5}]
+    assert plan.requested_case_count == 2

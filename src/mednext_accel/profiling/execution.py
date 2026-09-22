@@ -24,9 +24,15 @@ class WorkloadShapes:
 
 
 @dataclass(frozen=True, slots=True)
-class BatchSearchResult:
+class WorkloadBatchSelection:
     batches: tuple[int, ...]
     reference_steps: Mapping[int, Mapping[str, object]]
+
+    def __post_init__(self) -> None:
+        if len(self.batches) > 1:
+            raise ValueError("workload batch selection must contain at most one batch")
+        if set(self.reference_steps) != set(self.batches):
+            raise ValueError("reference steps must match the selected batch")
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,7 +78,7 @@ def build_execution_plan(
     campaign: Campaign,
     *,
     discover: Callable[[Workload], WorkloadShapes],
-    search: Callable[[Workload], BatchSearchResult],
+    search: Callable[[Workload], WorkloadBatchSelection],
     progress: ProgressReporter | None = None,
 ) -> ExecutionPlan:
     """Discover, search, and globally deduplicate a campaign's kernel cases."""

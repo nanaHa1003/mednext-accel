@@ -14,7 +14,7 @@ from .batch_search import ProbeResult, search_batches
 from .benchmark import run_json_subprocess
 from .campaign import Campaign, Workload
 from .execution import (
-    BatchSearchResult,
+    WorkloadBatchSelection,
     WorkloadShapes,
     build_execution_plan,
     validate_campaign_dtypes,
@@ -499,9 +499,17 @@ def _batches(
         )
 
     result = search_batches(campaign.batch_search, total_vram_bytes=total_vram, probe=probe)
-    return (
-        tuple(item.batch for item in result.probes if item.feasible),
-        model_results,
+    selected = result.maximum_feasible
+    if progress is not None:
+        progress.emit(
+            ProgressEvent(
+                "status",
+                "batch-search",
+                message=f"maximum feasible batch: {selected}" if selected else "no feasible batch",
+            )
+        )
+    return (() if selected == 0 else (selected,)), (
+        {} if selected == 0 else {selected: model_results[selected]}
     )
 
 
@@ -557,7 +565,7 @@ def execute_campaign(campaign: Campaign, progress: ProgressReporter | None = Non
     device = torch.cuda.current_device()
     total_vram = torch.cuda.get_device_properties(device).total_memory
 
-    def search(workload: Workload) -> BatchSearchResult:
+    def search(workload: Workload) -> WorkloadBatchSelection:
         if progress is not None:
             progress.emit(
                 ProgressEvent(
@@ -568,7 +576,7 @@ def execute_campaign(campaign: Campaign, progress: ProgressReporter | None = Non
             )
             progress.emit(ProgressEvent("stage_start", "batch-search"))
         batches, reference_steps = _batches(campaign, workload, total_vram, progress=progress)
-        return BatchSearchResult(batches, reference_steps)
+        return WorkloadBatchSelection(batches, reference_steps)
 
     plan = build_execution_plan(
         campaign, discover=discover_workload_shapes, search=search, progress=progress

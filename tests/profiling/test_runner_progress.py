@@ -7,6 +7,7 @@ from mednext_accel.optimization.descriptors import ExecutionContext, OperatorDes
 from mednext_accel.optimization.resolver import OptimizationResolver
 from mednext_accel.profiling import runner
 from mednext_accel.profiling.batch_search import BatchSearch
+from mednext_accel.profiling.batch_search import BatchSearchResult as BoundarySearchResult
 from mednext_accel.profiling.campaign import Campaign, Workload
 from mednext_accel.profiling.execution import WorkloadShapes
 from mednext_accel.profiling.grouped import case_payload, run_group_with_bisection
@@ -186,7 +187,7 @@ def _campaign_contexts():
     )
 
 
-def _prepare_campaign(monkeypatch, *, batches=(1, 2), depthwise=()):
+def _prepare_campaign(monkeypatch, *, batches=(2,), depthwise=()):
     monkeypatch.setitem(__import__("sys").modules, "torch", _Torch())
     monkeypatch.setattr(
         runner,
@@ -226,7 +227,7 @@ def test_batch_search_advances_after_every_completed_probe(monkeypatch) -> None:
     def search(config, *, total_vram_bytes, probe):
         assert total_vram_bytes == 48 * 1024**3
         probes = (probe(1), probe(3))
-        return type("SearchResult", (), {"probes": probes})()
+        return BoundarySearchResult(probes, maximum_feasible=1)
 
     outcomes = iter(
         (
@@ -252,6 +253,43 @@ def test_batch_search_advances_after_every_completed_probe(monkeypatch) -> None:
     assert advances[1].message == "batch=3 oom peak=0.0 GiB"
 
 
+@pytest.mark.parametrize("maximum_feasible", [13, 0])
+def test_batch_search_keeps_only_selected_maximum_and_reports_outcome(
+    monkeypatch, maximum_feasible
+):
+    batches_to_probe = (16, 1, 8, 12, 14, 13) if maximum_feasible else (16, 1)
+    model_results = {
+        batch: (
+            {"status": "ok", "step_ms": float(batch), "peak_bytes": batch * 100}
+            if maximum_feasible and batch <= 13
+            else {"status": "oom", "message": "CUDA out of memory"}
+        )
+        for batch in batches_to_probe
+    }
+
+    def search(config, *, total_vram_bytes, probe):
+        return BoundarySearchResult(
+            tuple(probe(batch) for batch in batches_to_probe), maximum_feasible
+        )
+
+    monkeypatch.setattr(runner, "search_batches", search)
+    monkeypatch.setattr(runner, "_invoke", lambda payload: model_results[payload["batch"]])
+    reporter = _Recorder()
+    campaign = _campaign_contexts()
+    batches, references = runner._batches(
+        campaign, campaign.workloads[0], 48 * 1024**3, progress=reporter
+    )
+
+    assert batches == ((13,) if maximum_feasible else ())
+    assert references == ({13: model_results[13]} if maximum_feasible else {})
+    outcome = "maximum feasible batch: 13" if maximum_feasible else "no feasible batch"
+    assert reporter.events[-1] == ProgressEvent("status", "batch-search", message=outcome)
+    assert sum(event.message == outcome for event in reporter.events) == 1
+    advances = [event for event in reporter.events if event.kind == "advance"]
+    assert len(advances) == len(batches_to_probe)
+    assert all(event.total is None for event in advances)
+
+
 def test_campaign_shares_groups_and_materializes_each_checkpoint_context(monkeypatch, capsys):
     _prepare_campaign(
         monkeypatch,
@@ -274,7 +312,7 @@ def test_campaign_shares_groups_and_materializes_each_checkpoint_context(monkeyp
             validations[context].append(payload["batch"])
             profile = payload["optimization"]
             assert {m["checkpointing"] for m in profile["measurements"]} == {context}
-            assert len(profile["measurements"]) == 10
+            assert len(profile["measurements"]) == 5
             return {"status": "ok", "step_ms": 8.0, "peak_bytes": 100}
         return _successful_group(payload)
 
@@ -284,7 +322,7 @@ def test_campaign_shares_groups_and_materializes_each_checkpoint_context(monkeyp
     # Exercise the compatible public entry point as well as the richer result below.
     measurements = runner.run_campaign(_campaign_contexts(), progress=reporter)
 
-    assert len(groups) == 10
+    assert len(groups) == 5
     assert {group.category for group in groups} == {
         "pointwise",
         "regular-dx",
@@ -292,9 +330,9 @@ def test_campaign_shares_groups_and_materializes_each_checkpoint_context(monkeyp
         "downsample-dx",
         "transpose-dw",
     }
-    assert validations == {"none": [1, 2], "all-expansion": [1, 2]}
+    assert validations == {"none": [2], "all-expansion": [2]}
     assert isinstance(measurements, tuple)
-    assert len(measurements) == 20
+    assert len(measurements) == 10
     assert {item.checkpointing for item in measurements} == {"none", "all-expansion"}
     assert all(item.valid for item in measurements)
     assert any(event.stage == "batch-search" for event in reporter.events)
@@ -303,103 +341,70 @@ def test_campaign_shares_groups_and_materializes_each_checkpoint_context(monkeyp
     groups.clear()
     run = runner.execute_campaign(_campaign_contexts(), progress=_Recorder())
     assert run.measurements == measurements
-    assert run.statistics.requested_case_count == 20
-    assert run.statistics.kernel_case_count == 10
-    assert run.statistics.kernel_group_count == 10
-    assert run.statistics.whole_model_validation_count == 4
+    assert run.statistics.requested_case_count == 10
+    assert run.statistics.kernel_case_count == 5
+    assert run.statistics.kernel_group_count == 5
+    assert run.statistics.whole_model_validation_count == 2
 
     events = reporter.events
     kernel_plan = next(
         event for event in events if event.kind == "status" and event.stage == "kernel-groups"
     )
     assert kernel_plan.message == (
-        "kernel plan: 10 planned groups, 10 unique experiments, 20 requested references"
+        "kernel plan: 5 planned groups, 5 unique experiments, 10 requested references"
     )
     group_advances = [
         event for event in events if event.kind == "advance" and event.stage == "kernel-groups"
     ]
-    assert [event.completed for event in group_advances] == list(range(1, 11))
-    assert [event.secondary_completed for event in group_advances] == list(range(1, 11))
-    assert all(event.secondary_total == 10 for event in group_advances)
+    assert [event.completed for event in group_advances] == list(range(1, 6))
+    assert [event.secondary_completed for event in group_advances] == list(range(1, 6))
+    assert all(event.secondary_total == 5 for event in group_advances)
     assert (
         ProgressEvent(
             "status",
             "validation",
-            message="validation plan: 4 whole-model validations",
+            message="validation plan: 2 whole-model validations",
         )
         in events
     )
     validation_starts = [
         event for event in events if event.kind == "stage_start" and event.stage == "validation"
     ]
-    assert validation_starts == [ProgressEvent("stage_start", "validation", total=4)]
+    assert validation_starts == [ProgressEvent("stage_start", "validation", total=2)]
     validation_advances = [
         event for event in events if event.kind == "advance" and event.stage == "validation"
     ]
-    assert [event.completed for event in validation_advances] == [1, 2, 3, 4]
-    assert all(event.total == 4 for event in validation_advances)
+    assert [event.completed for event in validation_advances] == [1, 2]
+    assert all(event.total == 2 for event in validation_advances)
 
 
-@pytest.mark.parametrize("rejection", ["regression", "error", "missing-reference"])
-def test_boundary_rejection_invalidates_entire_segment_only_in_its_context(monkeypatch, rejection):
-    _prepare_campaign(monkeypatch, batches=(1, 2, 3, 4, 5))
+@pytest.mark.parametrize("rejection", ["regression", "error"])
+def test_selected_batch_rejection_invalidates_only_its_checkpoint_context(monkeypatch, rejection):
+    _prepare_campaign(monkeypatch, batches=(5,))
     validations = {"none": [], "all-expansion": []}
-    if rejection == "missing-reference":
-
-        def batches(campaign, workload, total_vram, progress=None):
-            return (1, 2, 3, 4, 5), {
-                batch: {"status": "ok", "step_ms": 10.0, "peak_bytes": 100}
-                for batch in (1, 2, 3, 4, 5)
-                if not (workload.checkpointing == "none" and batch == 5)
-            }
-
-        monkeypatch.setattr(runner, "_batches", batches)
 
     def invoke(payload):
         if payload["kind"] != "model":
             return _successful_group(payload)
         context = payload["workload"]["checkpointing"]
         validations[context].append(payload["batch"])
-        if context == "none" and payload["batch"] == 5:
+        if context == "none":
             if rejection == "error":
                 return {"status": "error"}
-            if rejection == "regression":
-                return {"status": "ok", "step_ms": 12.0, "peak_bytes": 100}
+            return {"status": "ok", "step_ms": 12.0, "peak_bytes": 100}
         return {"status": "ok", "step_ms": 8.0, "peak_bytes": 100}
 
     monkeypatch.setattr(runner, "_invoke", invoke)
     run = runner.execute_campaign(_campaign_contexts())
 
-    assert validations == {"none": [1, 5], "all-expansion": [1, 5]}
-    assert [m.valid for m in run.measurements if m.checkpointing == "none"] == [False] * 5
-    assert [m.valid for m in run.measurements if m.checkpointing == "all-expansion"] == [True] * 5
-    assert run.statistics.whole_model_validation_count == 4
-
-
-def test_segment_changes_and_sampling_gaps_each_get_their_own_boundaries(monkeypatch):
-    _prepare_campaign(monkeypatch, batches=(1, 2, 3, 4, 6))
-    validations = []
-
-    def invoke(payload):
-        if payload["kind"] == "model":
-            validations.append(payload["batch"])
-            return {"status": "ok", "step_ms": 8.0, "peak_bytes": 100}
-        result = _successful_group(payload)
-        if payload["cases"][0]["batch"] == 3:
-            result["results"][0]["candidate_ms"] = 12.0
-        return result
-
-    monkeypatch.setattr(runner, "_invoke", invoke)
-    campaign = replace(_campaign_contexts(), workloads=_campaign_contexts().workloads[:1])
-    run = runner.execute_campaign(campaign)
-
-    assert validations == [1, 2, 3, 4, 6]
-    assert len(run.measurements) == 5
-    assert run.statistics.whole_model_validation_count == 5
+    assert validations == {"none": [5], "all-expansion": [5]}
+    assert [m.valid for m in run.measurements if m.checkpointing == "none"] == [False]
+    assert [m.valid for m in run.measurements if m.checkpointing == "all-expansion"] == [True]
+    assert run.statistics.whole_model_validation_count == 2
 
 
 def test_variants_validate_independently_against_their_own_reference(monkeypatch):
-    _prepare_campaign(monkeypatch, batches=(1, 2, 3))
+    _prepare_campaign(monkeypatch, batches=(3,))
     base = _campaign_contexts().workloads[0]
     campaign = replace(
         _campaign_contexts(),
@@ -414,14 +419,14 @@ def test_variants_validate_independently_against_their_own_reference(monkeypatch
         runner,
         "_batches",
         lambda campaign, workload, total_vram, progress=None: (
-            (1, 2, 3),
+            (3,),
             {
                 batch: {
                     "status": "ok",
                     "step_ms": 10.0 if workload.variant == "base" else 6.0,
                     "peak_bytes": 100,
                 }
-                for batch in (1, 2, 3)
+                for batch in (3,)
             },
         ),
     )
@@ -437,29 +442,26 @@ def test_variants_validate_independently_against_their_own_reference(monkeypatch
             )
         )
         assert all(m["valid"] for m in payload["optimization"]["measurements"])
-        assert len(payload["optimization"]["measurements"]) == 3
+        assert len(payload["optimization"]["measurements"]) == 1
         return {"status": "ok", "step_ms": 8.0, "peak_bytes": 100}
 
     monkeypatch.setattr(runner, "_invoke", invoke)
     run = runner.execute_campaign(campaign)
 
     assert validations == [
-        ("base", "none", 1),
         ("base", "none", 3),
-        ("large", "none", 1),
         ("large", "none", 3),
-        ("base", "all-expansion", 1),
         ("base", "all-expansion", 3),
     ]
-    assert run.statistics.kernel_case_count == 3
-    assert run.statistics.requested_case_count == 9
+    assert run.statistics.kernel_case_count == 1
+    assert run.statistics.requested_case_count == 3
 
     profile = synthesize_profile(run.measurements, name="final", sm=(8, 9), objective="balanced")
     resolver = OptimizationResolver([profile])
     descriptor = OperatorDescriptor(
         "pointwise_conv3d", "regular", 32, 64, (1, 1, 1), (1, 1, 1), (0, 0, 0), (1, 1, 1), 1
     )
-    for batch in (1, 2, 3):
+    for batch in (3,):
         for variant in ("base", "large"):
             for checkpointing in ("none", "all-expansion"):
                 context = ExecutionContext(
@@ -478,7 +480,7 @@ def test_variants_validate_independently_against_their_own_reference(monkeypatch
                 assert decision.implementation == (
                     "reference" if checkpointing == "none" else "pointwise_gemm_per_sample"
                 )
-    assert [m.valid for m in run.measurements] == [False] * 6 + [True] * 3
+    assert [m.valid for m in run.measurements] == [False, False, True]
 
 
 def test_statistics_count_physical_bisection_attempts_and_keep_failed_evidence(monkeypatch):
@@ -638,3 +640,44 @@ def test_runner_rejects_unsupported_dtypes_before_gpu_or_planning(monkeypatch, d
         entrypoint(campaign)
 
     assert callbacks == []
+
+
+def test_campaign_profiles_and_validates_only_each_contexts_selected_maximum(monkeypatch):
+    monkeypatch.setitem(__import__("sys").modules, "torch", _Torch())
+    monkeypatch.setattr(
+        runner,
+        "discover_workload_shapes",
+        lambda workload: WorkloadShapes(((32, 64, (128, 128, 128)),), ()),
+    )
+    references = {"none": [], "all-expansion": []}
+    validations = {"none": [], "all-expansion": []}
+    kernel_batches = []
+
+    def invoke(payload):
+        if payload["kind"] == "kernel_group":
+            kernel_batches.extend(case["batch"] for case in payload["cases"])
+            return _successful_group(payload)
+        context = payload["workload"]["checkpointing"]
+        batch = payload["batch"]
+        if "optimization" in payload:
+            validations[context].append(batch)
+            assert {m["batch"] for m in payload["optimization"]["measurements"]} == {batch}
+            return {"status": "ok", "step_ms": 8.0, "peak_bytes": 100}
+        references[context].append(batch)
+        if context == "none" and batch > 3:
+            return {"status": "oom", "message": "CUDA out of memory"}
+        return {"status": "ok", "step_ms": 10.0, "peak_bytes": 100}
+
+    monkeypatch.setattr(runner, "_invoke", invoke)
+    run = runner.execute_campaign(_campaign_contexts())
+
+    assert references == {"none": [5, 1, 3, 4], "all-expansion": [5]}
+    assert kernel_batches == [3, 5]
+    assert validations == {"none": [3], "all-expansion": [5]}
+    assert [(m.checkpointing, m.batch) for m in run.measurements] == [
+        ("none", 3),
+        ("all-expansion", 5),
+    ]
+    assert run.statistics.whole_model_validation_count == 2
+    profile = synthesize_profile(run.measurements, name="final", sm=(8, 9), objective="balanced")
+    assert {(rule.batch.minimum, rule.batch.maximum) for rule in profile.rules} == {(3, 3), (5, 5)}
