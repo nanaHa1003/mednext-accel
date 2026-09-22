@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
+from types import MappingProxyType
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,6 +31,10 @@ class ProbeResult:
 class BatchSearchResult:
     probes: tuple[ProbeResult, ...]
     maximum_feasible: int
+
+    @property
+    def by_batch(self) -> Mapping[int, ProbeResult]:
+        return MappingProxyType({item.batch: item for item in self.probes})
 
     @property
     def probed_batches(self) -> tuple[int, ...]:
@@ -63,7 +68,7 @@ def search_batches(
         if run(upper).feasible:
             return BatchSearchResult((results[upper],), upper)
         if upper == 1 or not run(1).feasible:
-            ordered = tuple(results[batch] for batch in sorted(results))
+            ordered = tuple(results.values())
             return BatchSearchResult(ordered, 0)
         lower = 1
     else:
@@ -82,5 +87,5 @@ def search_batches(
         else:
             upper = candidate
 
-    ordered = tuple(results[batch] for batch in sorted(results))
+    ordered = tuple(results.values())
     return BatchSearchResult(ordered, lower)

@@ -27,7 +27,7 @@ def measured() -> Measurement:
         candidate_ms=1.0,
         reference_peak_bytes=200,
         candidate_peak_bytes=100,
-        valid=True,
+        kernel_valid=True,
     )
 
 
@@ -244,3 +244,21 @@ def test_public_profile_rejects_dtypes_before_any_profiling_side_effect(
             api.profile(source)
         else:
             cli.main(["profile", str(campaign_path), "--progress", "quiet"])
+
+
+@pytest.mark.parametrize("entrypoint", ["api", "cli"])
+def test_phases_rejected_before_environment_and_cuda(monkeypatch, tmp_path, entrypoint):
+    source = {"workloads": [{"phases": ["training"]}]}
+    path = tmp_path / "obsolete.yaml"
+    path.write_text(json.dumps(source))
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("side effects before rejecting phases")
+
+    monkeypatch.setattr(api, "collect_environment", forbidden)
+    monkeypatch.setattr(api.torch.cuda, "is_available", forbidden)
+    with pytest.raises(ValueError, match="phases.*removed.*training"):
+        if entrypoint == "api":
+            api.profile(source)
+        else:
+            cli.main(["profile", str(path), "--progress", "quiet"])

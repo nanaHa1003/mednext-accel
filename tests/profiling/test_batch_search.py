@@ -31,7 +31,7 @@ def test_infeasible_maximum_is_refined_by_binary_search() -> None:
         probe=result_for_boundary(13, calls),
     )
     assert calls == [16, 1, 8, 12, 14, 13]
-    assert result.probed_batches == (1, 8, 12, 13, 14, 16)
+    assert result.probed_batches == (16, 1, 8, 12, 14, 13)
     assert result.maximum_feasible == 13
 
 
@@ -43,7 +43,7 @@ def test_unbounded_search_uses_exponential_growth_then_binary_search() -> None:
         probe=result_for_boundary(13, calls),
     )
     assert calls == [1, 2, 4, 8, 16, 12, 14, 13]
-    assert result.probed_batches == (1, 2, 4, 8, 12, 13, 14, 16)
+    assert result.probed_batches == (1, 2, 4, 8, 16, 12, 14, 13)
     assert result.maximum_feasible == 13
 
 
@@ -91,3 +91,13 @@ def test_mismatched_probe_result_is_rejected() -> None:
             total_vram_bytes=1000,
             probe=lambda batch: ProbeResult(batch + 1, True, 100),
         )
+
+
+def test_attempt_order_and_index_are_both_preserved():
+    calls = []
+    result = search_batches(
+        BatchSearch(maximum=16), total_vram_bytes=10000, probe=result_for_boundary(13, calls)
+    )
+    assert result.probed_batches == tuple(calls)
+    assert set(result.by_batch) == set(calls)
+    assert result.by_batch[16].feasible is False

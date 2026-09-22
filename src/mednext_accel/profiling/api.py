@@ -16,6 +16,7 @@ import torch
 from ..optimization.policy import OptimizationPolicy, policy_to_primitive
 from .campaign import Campaign, CampaignSource, campaign_to_primitive, load_campaign
 from .environment import collect_environment
+from .evidence import CampaignEvidence, EnvironmentEvidence, ProfilingEvidence
 from .execution import validate_campaign_dtypes
 from .progress import ProgressEvent, ProgressReporter
 from .synthesize import Measurement, synthesize_profile
@@ -95,6 +96,7 @@ class ProfilingResult:
     measurements: tuple[Measurement, ...]
     output_path: Path
     environment: dict[str, object] = field(default_factory=dict)
+    evidence: ProfilingEvidence | None = None
 
     def save(self, path: str | PathLike[str] | None = None) -> Path:
         return write_profile_atomic(self.output_path if path is None else path, self.profile)
@@ -149,11 +151,19 @@ def profile(
     }
     generated = synthesize_campaign(
         campaign,
-        measurements,
+        campaign_run.policy_measurements,
         environment=environment,
         execution=execution,
     )
-    result = ProfilingResult(generated, measurements, planned_output, environment)
+    evidence = ProfilingEvidence(
+        EnvironmentEvidence(environment),
+        CampaignEvidence(campaign_to_primitive(campaign)),
+        campaign_run.batch_searches,
+        measurements,
+        campaign_run.model_comparisons,
+        execution,
+    )
+    result = ProfilingResult(generated, measurements, planned_output, environment, evidence)
     result.save()
     if progress is not None:
         progress.emit(

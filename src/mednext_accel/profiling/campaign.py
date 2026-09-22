@@ -22,7 +22,6 @@ class Workload:
     variant: str
     spatial: tuple[int, int, int]
     dtypes: tuple[str, ...] = ("bfloat16",)
-    phases: tuple[str, ...] = ("training", "inference")
     checkpointing: str = "none"
     in_channels: int = 1
     out_channels: int = 3
@@ -35,6 +34,13 @@ class Campaign:
     batch_search: BatchSearch
     objective: Literal["balanced", "throughput", "memory"] = "balanced"
     compile_mode: str = "max-autotune-no-cudagraphs"
+    seed: int = 0
+
+    def __post_init__(self):
+        if self.objective not in ("balanced", "throughput", "memory"):
+            raise ValueError(f"unknown profiling objective {self.objective!r}")
+        if type(self.seed) is not int or not 0 <= self.seed < 2**63:
+            raise ValueError("seed must be an integer in [0, 2**63)")
 
 
 CampaignSource = str | PathLike[str] | Mapping[str, object] | Campaign
@@ -44,6 +50,8 @@ def campaign_to_primitive(campaign: Campaign) -> dict[str, object]:
     """Return the complete, JSON-compatible identity of a profiling campaign."""
 
     return {
+        "phase": "training",
+        "seed": campaign.seed,
         "preset": campaign.preset,
         "objective": campaign.objective,
         "compile_mode": campaign.compile_mode,
@@ -57,7 +65,6 @@ def campaign_to_primitive(campaign: Campaign) -> dict[str, object]:
                 "variant": workload.variant,
                 "spatial": list(workload.spatial),
                 "dtypes": list(workload.dtypes),
-                "phases": list(workload.phases),
                 "checkpointing": workload.checkpointing,
                 "in_channels": workload.in_channels,
                 "out_channels": workload.out_channels,
@@ -90,6 +97,8 @@ def load_campaign(source: CampaignSource | None) -> Campaign:
     if source is None:
         return Campaign("all", _default_workloads(), BatchSearch())
     data = _load_mapping(source)
+    if "phases" in data:
+        raise ValueError("campaign phases was removed; profiling measures training only")
     preset = str(data.get("preset", "mednext-v1"))
     if preset not in ("mednext-v1", "all"):
         raise ValueError(f"preset {preset!r} is unavailable; installed model families: mednext-v1")
@@ -110,6 +119,8 @@ def load_campaign(source: CampaignSource | None) -> Campaign:
         expanded: list[Workload] = []
         for index, raw in enumerate(raw_workloads):
             item = _mapping(raw, f"workloads[{index}]")
+            if "phases" in item:
+                raise ValueError("workload phases was removed; profiling measures training only")
             variant = str(item.get("variant", "base"))
             if variant not in _VARIANTS:
                 raise ValueError(f"unknown MedNeXt v1 variant {variant!r}")
@@ -128,7 +139,6 @@ def load_campaign(source: CampaignSource | None) -> Campaign:
                         variant=variant,
                         spatial=spatial,  # type: ignore[arg-type]
                         dtypes=tuple(item.get("dtypes", ("bfloat16",))),
-                        phases=tuple(item.get("phases", ("training", "inference"))),
                         checkpointing=context,
                         in_channels=int(item.get("in_channels", 1)),
                         out_channels=int(item.get("out_channels", 3)),
@@ -141,4 +151,5 @@ def load_campaign(source: CampaignSource | None) -> Campaign:
         batch_search=batch_search,
         objective=str(data.get("objective", "balanced")),  # type: ignore[arg-type]
         compile_mode=str(data.get("compile_mode", "max-autotune-no-cudagraphs")),
+        seed=data.get("seed", 0),
     )

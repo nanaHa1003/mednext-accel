@@ -6,13 +6,19 @@ import argparse
 import gc
 import json
 import sys
-from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 
+from ..optimization.descriptors import ExecutionContext
 from ..optimization.policy import policy_to_primitive
 from .batch_search import ProbeResult, search_batches
 from .benchmark import run_json_subprocess
 from .campaign import Campaign, Workload
+from .evidence import (
+    BatchProbeEvidence,
+    BatchSearchEvidence,
+    ModelComparisonEvidence,
+    ModelProbeEvidence,
+)
 from .execution import (
     WorkloadBatchSelection,
     WorkloadShapes,
@@ -25,16 +31,11 @@ from .progress import ProgressEvent, ProgressReporter
 from .synthesize import (
     Measurement,
     measurement_from_result,
-    reconcile_measurements,
+    measurement_identity,
     synthesize_profile,
 )
-from .validation import (
-    apply_validation_results,
-    decision_signature,
-    segment_decisions,
-    validate_components,
-    validation_batches,
-)
+from .validation import validate_components
+from .whole_model import compare_model_results, effective_policy_identity, model_probe_failure
 
 
 def _checkpoint(value: str):
@@ -76,6 +77,8 @@ def _timed(function, *, warmup: int = 2, repetitions: int = 5) -> tuple[float, i
 def _model_probe(payload: dict[str, object]) -> dict[str, object]:
     import torch
 
+    seed = int(payload.get("seed", 0))
+    torch.manual_seed(seed)
     workload = payload["workload"]
     assert isinstance(workload, dict)
     optimization = payload.get("optimization", "reference")
@@ -98,7 +101,10 @@ def _model_probe(payload: dict[str, object]) -> dict[str, object]:
     )
     optimizer = torch.optim.AdamW(model.parameters())
 
+    last_loss = None
+
     def step() -> None:
+        nonlocal last_loss
         optimizer.zero_grad(set_to_none=True)
         with torch.autocast("cuda", dtype=torch.bfloat16):
             output = model(sample)
@@ -106,15 +112,24 @@ def _model_probe(payload: dict[str, object]) -> dict[str, object]:
             loss = primary.float().square().mean()
         loss.backward()
         optimizer.step()
+        last_loss = loss.detach()
 
     step_ms, peak = _timed(step, warmup=1, repetitions=1)
-    return {"status": "ok", "step_ms": step_ms, "peak_bytes": peak}
+    return {
+        "status": "ok",
+        "seed": seed,
+        "step_ms": step_ms,
+        "peak_bytes": peak,
+        "diagnostics": {"loss": last_loss.item()},
+    }
 
 
 def _pointwise_probe(payload: dict[str, object]) -> dict[str, object]:
     import torch
     from torch.nn import functional as functional
 
+    seed = int(payload.get("seed", 0))
+    torch.manual_seed(seed)
     batch = int(payload["batch"])
     channels = int(payload["in_channels"])
     outputs = int(payload["out_channels"])
@@ -153,6 +168,7 @@ def _pointwise_probe(payload: dict[str, object]) -> dict[str, object]:
     return {
         "status": "ok",
         **validation,
+        "seed": seed,
         "reference_ms": native_ms,
         "candidate_ms": candidate_ms,
         "reference_peak_bytes": native_peak,
@@ -167,6 +183,8 @@ def _depthwise_probe(payload: dict[str, object]) -> dict[str, object]:
 
     from ..ops._triton import depthwise as backend
 
+    seed = int(payload.get("seed", 0))
+    torch.manual_seed(seed)
     batch = int(payload["batch"])
     channels = int(payload["in_channels"])
     kernel = int(payload["kernel_size"])
@@ -306,6 +324,7 @@ def _depthwise_probe(payload: dict[str, object]) -> dict[str, object]:
     return {
         "status": "ok",
         **validation,
+        "seed": seed,
         "implementation": implementation,
         "reference_ms": native_ms,
         "candidate_ms": candidate_ms,
@@ -469,7 +488,7 @@ def _batches(
     workload: Workload,
     total_vram: int,
     progress: ProgressReporter | None = None,
-) -> tuple[tuple[int, ...], dict[int, dict[str, object]]]:
+) -> WorkloadBatchSelection:
     model_results: dict[int, dict[str, object]] = {}
     completed_probes = 0
 
@@ -482,12 +501,15 @@ def _batches(
             "batch": batch,
             "workload": asdict(workload),
             "compile_mode": campaign.compile_mode,
+            "seed": campaign.seed,
         }
         result = _invoke(payload)
         model_results[batch] = result
-        feasible = result.get("status") == "ok"
+        recorded = ModelProbeEvidence.from_result(result, seed=campaign.seed)
+        failure = model_probe_failure("probe", recorded)
+        feasible = failure is None
         if progress is not None:
-            peak = int(result.get("peak_bytes", 0)) / 1024**3
+            peak = (recorded.peak_bytes or 0) / 1024**3
             state = "feasible" if feasible else str(result.get("status", "failed"))
             progress.emit(
                 ProgressEvent(
@@ -508,8 +530,8 @@ def _batches(
         return ProbeResult(
             batch,
             feasible,
-            int(result.get("peak_bytes", total_vram + 1)),
-            None if feasible else str(result.get("message", result.get("status"))),
+            int(recorded.peak_bytes or 0),
+            failure,
         )
 
     result = search_batches(campaign.batch_search, total_vram_bytes=total_vram, probe=probe)
@@ -522,30 +544,37 @@ def _batches(
                 message=f"maximum feasible batch: {selected}" if selected else "no feasible batch",
             )
         )
-    return (() if selected == 0 else (selected,)), (
-        {} if selected == 0 else {selected: model_results[selected]}
+    budget = int(total_vram * campaign.batch_search.memory_fraction)
+    evidence = BatchSearchEvidence(
+        workload=asdict(workload),
+        budget_bytes=budget,
+        attempts=tuple(
+            BatchProbeEvidence(
+                batch=probe.batch,
+                result=ModelProbeEvidence.from_result(
+                    model_results[probe.batch], seed=campaign.seed
+                ),
+                within_budget=(
+                    (
+                        peak := ModelProbeEvidence.from_result(
+                            model_results[probe.batch], seed=campaign.seed
+                        ).peak_bytes
+                    )
+                    is not None
+                    and 0 < peak <= budget
+                ),
+                feasible=probe.feasible,
+                reason=probe.reason,
+            )
+            for probe in result.probes
+        ),
+        selected_maximum=selected,
     )
-
-
-def _whole_model_accepts(
-    objective: str,
-    reference: Mapping[str, object],
-    candidate: Mapping[str, object],
-) -> bool:
-    if any(
-        result.get("status") != "ok" or not {"step_ms", "peak_bytes"} <= result.keys()
-        for result in (reference, candidate)
-    ):
-        return False
-    reference_ms = float(reference["step_ms"])
-    candidate_ms = float(candidate["step_ms"])
-    reference_peak = int(reference["peak_bytes"])
-    candidate_peak = int(candidate["peak_bytes"])
-    if objective == "memory":
-        return candidate_peak < reference_peak and candidate_ms <= reference_ms * 1.10
-    if objective == "throughput":
-        return candidate_ms < reference_ms and candidate_peak <= reference_peak * 1.25
-    return candidate_ms < reference_ms and candidate_peak <= reference_peak * 1.15
+    return WorkloadBatchSelection(
+        (() if selected == 0 else (selected,)),
+        {} if selected == 0 else {selected: model_results[selected]},
+        evidence,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -566,6 +595,26 @@ class ExecutionStatistics:
 class CampaignRun:
     measurements: tuple[Measurement, ...]
     statistics: ExecutionStatistics
+    batch_searches: tuple[BatchSearchEvidence, ...] = ()
+    model_comparisons: tuple[ModelComparisonEvidence, ...] = ()
+
+    @property
+    def policy_measurements(self) -> tuple[Measurement, ...]:
+        """Temporary publication input; source numerical evidence stays intact.
+
+        Final negative-only overlays and policy publication are handled separately.
+        A rejection removes positive rules for every indistinguishable match.
+        """
+        rejected = {
+            measurement_identity(item)
+            for comparison in self.model_comparisons
+            if not comparison.policy_accepted
+            for item in self.measurements
+            if item.batch == comparison.batch and item.workload == comparison.workload
+        }
+        return tuple(
+            item for item in self.measurements if measurement_identity(item) not in rejected
+        )
 
 
 def execute_campaign(campaign: Campaign, progress: ProgressReporter | None = None) -> CampaignRun:
@@ -589,8 +638,7 @@ def execute_campaign(campaign: Campaign, progress: ProgressReporter | None = Non
                 )
             )
             progress.emit(ProgressEvent("stage_start", "batch-search"))
-        batches, reference_steps = _batches(campaign, workload, total_vram, progress=progress)
-        return WorkloadBatchSelection(batches, reference_steps)
+        return _batches(campaign, workload, total_vram, progress=progress)
 
     plan = build_execution_plan(
         campaign,
@@ -637,7 +685,9 @@ def execute_campaign(campaign: Campaign, progress: ProgressReporter | None = Non
             )
 
     for group in plan.kernel_groups:
-        raw_results.update(run_group_with_bisection(group, _invoke, on_attempt=on_attempt))
+        raw_results.update(
+            run_group_with_bisection(group, _invoke, on_attempt=on_attempt, seed=campaign.seed)
+        )
 
     cases_by_key = {case.key: case for case in plan.kernel_cases}
     validation_plans = []
@@ -648,19 +698,12 @@ def execute_campaign(campaign: Campaign, progress: ProgressReporter | None = Non
                 cases_by_key[key],
                 raw_results.get(cases_by_key[key].identifier, {}),
                 checkpointing=workload.checkpointing,
+                objective=campaign.objective,
+                workload=asdict(workload),
             )
             for key in workload_run.case_keys
         )
-        by_batch: dict[int, list[Measurement]] = {batch: [] for batch in workload_run.batches}
-        for item in context_measurements:
-            by_batch[item.batch].append(item)
-        segments = segment_decisions(
-            {
-                batch: decision_signature(items, campaign.objective)
-                for batch, items in by_batch.items()
-            }
-        )
-        endpoints = validation_batches(segments)
+        endpoints = workload_run.batches
         provisional = (
             synthesize_profile(
                 context_measurements,
@@ -671,11 +714,9 @@ def execute_campaign(campaign: Campaign, progress: ProgressReporter | None = Non
             if endpoints
             else None
         )
-        validation_plans.append(
-            (workload_run, context_measurements, segments, endpoints, provisional)
-        )
+        validation_plans.append((workload_run, context_measurements, endpoints, provisional))
 
-    validation_total = sum(len(item[3]) for item in validation_plans)
+    validation_total = sum(len(item[2]) for item in validation_plans)
     if progress is not None:
         progress.emit(
             ProgressEvent(
@@ -688,9 +729,9 @@ def execute_campaign(campaign: Campaign, progress: ProgressReporter | None = Non
 
     measurements: list[Measurement] = []
     validation_count = 0
-    for workload_run, context_measurements, segments, endpoints, provisional in validation_plans:
+    model_comparisons = []
+    for workload_run, context_measurements, endpoints, provisional in validation_plans:
         workload = workload_run.workload
-        accepted: dict[int, bool] = {}
         for batch in endpoints:
             assert provisional is not None
             candidate_step = _invoke(
@@ -700,12 +741,32 @@ def execute_campaign(campaign: Campaign, progress: ProgressReporter | None = Non
                     "workload": asdict(workload),
                     "compile_mode": campaign.compile_mode,
                     "optimization": policy_to_primitive(provisional),
+                    "seed": campaign.seed,
                 }
             )
             validation_count += 1
-            accepted[batch] = _whole_model_accepts(
-                campaign.objective, workload_run.reference_steps.get(batch, {}), candidate_step
+            context = ExecutionContext(
+                phase="training",
+                device_type="cuda",
+                sm=torch.cuda.get_device_capability(),
+                total_vram_bytes=total_vram,
+                dtype=workload.dtypes[0],
+                batch_size=batch,
+                spatial_shape=workload.spatial,
+                model_family=workload.model_family,
+                variant=workload.variant,
+                checkpointing=workload.checkpointing,
             )
+            comparison = compare_model_results(
+                campaign.objective,
+                workload_run.reference_steps.get(batch, {}),
+                candidate_step,
+                workload=asdict(workload),
+                batch=batch,
+                seed=campaign.seed,
+                effective_policy=effective_policy_identity(provisional, context),
+            )
+            model_comparisons.append(comparison)
             if progress is not None:
                 progress.emit(
                     ProgressEvent(
@@ -713,13 +774,17 @@ def execute_campaign(campaign: Campaign, progress: ProgressReporter | None = Non
                         "validation",
                         completed=validation_count,
                         total=validation_total,
-                        message=f"batch={batch} {'accepted' if accepted[batch] else 'rejected'}",
+                        message=f"batch={batch} {comparison.reason}",
                     )
                 )
-        measurements.extend(apply_validation_results(context_measurements, segments, accepted))
+        measurements.extend(context_measurements)
 
     return CampaignRun(
-        measurements=reconcile_measurements(measurements),
+        measurements=tuple(measurements),
+        batch_searches=tuple(
+            item.batch_search for item in plan.workloads if item.batch_search is not None
+        ),
+        model_comparisons=tuple(model_comparisons),
         statistics=ExecutionStatistics(
             requested_case_count=plan.requested_case_count,
             kernel_case_count=len(plan.kernel_cases),
@@ -732,7 +797,7 @@ def execute_campaign(campaign: Campaign, progress: ProgressReporter | None = Non
 def run_campaign(
     campaign: Campaign, progress: ProgressReporter | None = None
 ) -> tuple[Measurement, ...]:
-    """Return schema-v1 measurements for callers using the original runner API."""
+    """Return immutable kernel evidence without model acceptance filtering."""
     return execute_campaign(campaign, progress=progress).measurements
 
 

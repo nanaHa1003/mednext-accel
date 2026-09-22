@@ -26,7 +26,7 @@ def test_minimal_yaml_uses_defaults(tmp_path: Path) -> None:
     campaign = load_campaign(path)
     assert len(campaign.workloads) == 1
     assert campaign.workloads[0].dtypes == ("bfloat16",)
-    assert campaign.workloads[0].phases == ("training", "inference")
+    assert not hasattr(campaign.workloads[0], "phases")
 
 
 def test_checkpoint_auto_expands_to_three_user_visible_contexts(tmp_path: Path) -> None:
@@ -61,7 +61,6 @@ def test_campaign_to_primitive_records_every_expanded_workload() -> None:
                     "variant": "base",
                     "spatial": [96, 128, 160],
                     "dtypes": ["bfloat16"],
-                    "phases": ["training"],
                     "checkpointing": "auto",
                     "in_channels": 2,
                     "out_channels": 8,
@@ -73,6 +72,8 @@ def test_campaign_to_primitive_records_every_expanded_workload() -> None:
     serialized = campaign_to_primitive(campaign)
 
     assert serialized == {
+        "phase": "training",
+        "seed": 0,
         "preset": "mednext-v1",
         "objective": "throughput",
         "compile_mode": "fullgraph",
@@ -83,7 +84,6 @@ def test_campaign_to_primitive_records_every_expanded_workload() -> None:
                 "variant": "base",
                 "spatial": [96, 128, 160],
                 "dtypes": ["bfloat16"],
-                "phases": ["training"],
                 "checkpointing": checkpointing,
                 "in_channels": 2,
                 "out_channels": 8,
@@ -91,3 +91,11 @@ def test_campaign_to_primitive_records_every_expanded_workload() -> None:
             for checkpointing in ("none", "all-expansion", "whole-block")
         ],
     }
+
+
+@pytest.mark.parametrize(
+    "source", [{"phases": ["training"]}, {"workloads": [{"phases": ["training"]}]}]
+)
+def test_obsolete_phases_are_rejected(source):
+    with pytest.raises(ValueError, match="phases.*removed.*training"):
+        load_campaign(source)

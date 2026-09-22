@@ -12,10 +12,10 @@ Invoke = Callable[[dict[str, object]], dict[str, object]]
 AttemptCallback = Callable[[Literal["scheduled", "completed"], int, int], None]
 
 
-def case_payload(case: KernelCase) -> dict[str, object]:
+def case_payload(case: KernelCase, *, seed: int = 0) -> dict[str, object]:
     """Serialize one kernel case for the child protocol."""
 
-    return {"case_id": case.identifier, **asdict(case.key)}
+    return {"case_id": case.identifier, "seed": seed, **asdict(case.key)}
 
 
 def response_matches(group: KernelGroup, result: Mapping[str, object]) -> bool:
@@ -37,12 +37,17 @@ def run_group_with_bisection(
     group: KernelGroup,
     invoke: Invoke,
     on_attempt: AttemptCallback | None = None,
+    *,
+    seed: int = 0,
 ) -> dict[str, dict[str, object]]:
     """Run a group, bisecting infrastructure failures down to singleton cases."""
 
     def execute(current: KernelGroup) -> dict[str, dict[str, object]]:
         result = invoke(
-            {"kind": "kernel_group", "cases": [case_payload(case) for case in current.cases]}
+            {
+                "kind": "kernel_group",
+                "cases": [case_payload(case, seed=seed) for case in current.cases],
+            }
         )
         if result.get("status") == "ok" and not response_matches(current, result):
             result = {
@@ -57,10 +62,10 @@ def run_group_with_bisection(
         if result.get("status") == "ok":
             items = result["results"]
             assert isinstance(items, list)
-            return {str(item["case_id"]): item for item in items}
+            return {str(item["case_id"]): {"seed": seed, **item} for item in items}
         if len(current.cases) == 1:
             case = current.cases[0]
-            return {case.identifier: {"case_id": case.identifier, **result}}
+            return {case.identifier: {"case_id": case.identifier, "seed": seed, **result}}
         midpoint = len(current.cases) // 2
         left = replace(current, cases=current.cases[:midpoint])
         right = replace(current, cases=current.cases[midpoint:])

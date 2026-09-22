@@ -142,3 +142,19 @@ def test_unhashable_case_identifier_is_bisected_and_accounted_for() -> None:
     assert sum(item[1] for item in attempt_events if item[0] == "scheduled") == 4
     assert sum(item[1] for item in attempt_events if item[0] == "completed") == 5
     assert sum(item[2] for item in attempt_events if item[0] == "completed") == 3
+
+
+def test_campaign_seed_is_preserved_through_bisection_and_failure():
+    cases = tuple(make_case(value) for value in (8, 16))
+    group = KernelGroup("pointwise", 1, cases)
+    seeds = []
+
+    def invoke(payload):
+        seeds.extend(item["seed"] for item in payload["cases"])
+        if len(payload["cases"]) > 1:
+            return {"status": "timeout"}
+        return ok_results(payload)
+
+    results = run_group_with_bisection(group, invoke, seed=37)
+    assert seeds == [37, 37, 37, 37]
+    assert all(item["seed"] == 37 for item in results.values())

@@ -6,6 +6,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 from .campaign import Campaign, Workload
+from .evidence import BatchSearchEvidence, freeze
 from .matrix import (
     KernelCase,
     KernelCaseKey,
@@ -27,8 +28,10 @@ class WorkloadShapes:
 class WorkloadBatchSelection:
     batches: tuple[int, ...]
     reference_steps: Mapping[int, Mapping[str, object]]
+    evidence: BatchSearchEvidence | None = None
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "reference_steps", freeze(self.reference_steps))
         if len(self.batches) > 1:
             raise ValueError("workload batch selection must contain at most one batch")
         if set(self.reference_steps) != set(self.batches):
@@ -42,6 +45,7 @@ class WorkloadRun:
     batches: tuple[int, ...]
     reference_steps: Mapping[int, Mapping[str, object]]
     case_keys: tuple[KernelCaseKey, ...]
+    batch_search: BatchSearchEvidence | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,6 +138,7 @@ def build_execution_plan(
             batches=result.batches,
             reference_steps=result.reference_steps,
             case_keys=case_keys,
+            batch_search=result.evidence,
         )
         for (workload, shapes, result), case_keys in zip(searched, references, strict=True)
     )

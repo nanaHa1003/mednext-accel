@@ -5,7 +5,7 @@ import pytest
 from mednext_accel.profiling.synthesize import (
     Measurement,
     candidate_wins,
-    reconcile_measurements,
+    selectable_measurements,
     synthesize_profile,
 )
 
@@ -26,7 +26,7 @@ def measured(batch: int, reference_ms: float, candidate_ms: float) -> Measuremen
         candidate_ms=candidate_ms,
         reference_peak_bytes=100,
         candidate_peak_bytes=100,
-        valid=True,
+        kernel_valid=True,
     )
 
 
@@ -45,7 +45,7 @@ def test_adjacent_batches_with_same_winner_merge_into_interval() -> None:
 
 def test_invalid_candidate_and_memory_objective_choose_safely() -> None:
     invalid = measured(2, 4.0, 1.0)
-    invalid = Measurement(**{**invalid.to_primitive(), "valid": False})
+    invalid = Measurement(**{**invalid.to_primitive(), "kernel_valid": False})
     memory = measured(3, 4.0, 4.1)
     memory = Measurement(
         **{
@@ -69,14 +69,15 @@ def test_reported_winner_uses_the_same_balanced_threshold_as_synthesis() -> None
 )
 def test_invalid_rule_match_blocks_other_selections_for_the_same_match(selection) -> None:
     candidate = measured(2, 4.0, 1.0)
-    rejected = replace(candidate, valid=False, **selection)
+    rejected = replace(candidate, kernel_valid=False, **selection)
 
     profile = synthesize_profile(
         [candidate, rejected], name="test", sm=(12, 0), objective="balanced"
     )
 
     assert profile.rules == ()
-    assert all(not item.valid for item in reconcile_measurements([candidate, rejected]))
+    assert selectable_measurements([candidate, rejected]) == ()
+    assert candidate.kernel_valid is True
 
 
 @pytest.mark.parametrize(
@@ -95,14 +96,14 @@ def test_invalid_rule_match_blocks_other_selections_for_the_same_match(selection
 )
 def test_invalid_rule_match_preserves_distinguishable_candidate(different_match) -> None:
     candidate = measured(2, 4.0, 1.0)
-    rejected = replace(candidate, valid=False, **different_match)
+    rejected = replace(candidate, kernel_valid=False, **different_match)
 
     profile = synthesize_profile(
         [candidate, rejected], name="test", sm=(12, 0), objective="balanced"
     )
 
     assert len(profile.rules) == 1
-    assert reconcile_measurements([candidate, rejected])[0].valid is True
+    assert selectable_measurements([candidate, rejected])[0].kernel_valid is True
 
 
 def test_raw_result_materialization_restores_context_and_uses_planned_identity():
@@ -140,15 +141,15 @@ def test_raw_result_materialization_restores_context_and_uses_planned_identity()
     assert item.checkpointing == "all-expansion"
     assert item.parameters == (("dw_splits", 128), ("dw_block", 512))
     assert item.implementation == "triton_split_dw"
-    assert item.valid and item.reference_ms == 10.0 and item.candidate_ms == 8.0
+    assert item.kernel_valid and item.reference_ms == 10.0 and item.candidate_ms == 8.0
     assert item.reference_peak_bytes == 100 and item.candidate_peak_bytes == 90
     assert raw["checkpointing"] == "none"
 
     for failed in ({}, {**raw, "status": "error"}):
         item = synthesize.measurement_from_result(case, failed, checkpointing="none")
-        assert not item.valid
-        assert item.reference_ms == item.candidate_ms == 0.0
-        assert item.reference_peak_bytes == item.candidate_peak_bytes == 0
+        assert not candidate_wins(item, "balanced")
+        assert item.reference_ms == failed.get("reference_ms", 0.0)
+        assert item.candidate_peak_bytes == failed.get("candidate_peak_bytes", 0)
 
 
 def test_single_selected_batch_produces_only_an_exact_batch_rule() -> None:
@@ -194,7 +195,7 @@ def test_measurement_serializes_probe_and_numerical_diagnostics():
     assert data["probe_status"] == "ok"
     assert data["probe_message"] == "completed"
     assert data["kernel_valid"] is False
-    assert data["whole_model_valid"] is None
+    assert "whole_model_valid" not in data
     assert data["validator"] == "component-relative-l2-v1"
     assert data["validation_metrics"] == metrics
     assert data["rejection_reason"] == raw["rejection_reason"]
@@ -209,58 +210,24 @@ def test_measurement_serializes_probe_and_numerical_diagnostics():
     assert failure["probe_status"] == "oom"
     assert failure["probe_message"] == "CUDA out of memory"
     assert failure["kernel_valid"] is None
-    assert failure["valid"] is False
+    assert failure["kernel_valid"] is None
 
 
 def test_legacy_direct_measurement_defaults_preserve_synthesis():
     item = measured(1, 4.0, 3.0)
     assert item.kernel_valid is True
-    assert item.whole_model_valid is None
+    assert not hasattr(item, "whole_model_valid")
     assert item.validator is None
     assert item.validation_metrics == {}
     assert candidate_wins(item, "balanced")
 
 
-@pytest.mark.parametrize(
-    ("kernel_valid", "whole_model_valid", "reason"),
-    [
-        (False, True, "dW: relative L2 error must be below 0.02"),
-        (True, False, "whole-model validation rejected segment"),
-    ],
-)
-def test_serialized_reconciliation_explains_rejection_and_preserves_prior_evidence(
-    kernel_valid, whole_model_valid, reason
-):
-    import json
-
-    from mednext_accel.optimization.policy import parse_policy, policy_to_primitive
-
-    candidate = replace(measured(2, 4.0, 1.0), whole_model_valid=True)
-    rejected = replace(
-        candidate,
-        valid=False,
-        kernel_valid=kernel_valid,
-        whole_model_valid=whole_model_valid,
-        rejection_reason=reason,
-    )
+def test_conflicting_policy_contexts_do_not_rewrite_kernel_evidence():
+    candidate = measured(2, 4.0, 1.0)
+    rejected = replace(candidate, kernel_valid=False, rejection_reason="numerical failure")
+    before = [item.to_primitive() for item in (candidate, rejected)]
     profile = synthesize_profile(
-        [candidate, rejected], name="conflicting-contexts", sm=(12, 0), objective="balanced"
+        [candidate, rejected], name="conflicting", sm=(12, 0), objective="balanced"
     )
-    serialized = json.loads(json.dumps(policy_to_primitive(profile)))
-    roundtrip = parse_policy(serialized)
-    accepted_kernel, original_rejection = (
-        item.to_primitive() for item in reconcile_measurements([candidate, rejected])
-    )
-
-    assert accepted_kernel["kernel_valid"] is True
-    assert accepted_kernel["whole_model_valid"] is True
-    assert accepted_kernel["valid"] is False
-    assert accepted_kernel["rejection_reason"] == (
-        "policy reconciliation rejected an indistinguishable rule context"
-    )
-    assert original_rejection["kernel_valid"] is kernel_valid
-    assert original_rejection["whole_model_valid"] is whole_model_valid
-    assert original_rejection["valid"] is False
-    # The first rejection remains authoritative; reconciliation does not hide it.
-    assert original_rejection["rejection_reason"] == reason
-    assert roundtrip.rules == ()
+    assert profile.rules == ()
+    assert before == [item.to_primitive() for item in (candidate, rejected)]

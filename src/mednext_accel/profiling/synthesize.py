@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import dataclass, field, replace
+from math import isfinite
 from typing import Literal
 
 from ..optimization.policy import OptimizationPolicy, parse_policy
+from .evidence import freeze, primitive
 from .matrix import KernelCase
 
 Objective = Literal["balanced", "throughput", "memory"]
@@ -28,24 +30,37 @@ class Measurement:
     candidate_ms: float
     reference_peak_bytes: int
     candidate_peak_bytes: int
-    valid: bool
+    kernel_valid: bool | None
     parameters: tuple[tuple[str, int], ...] = ()
     probe_status: str = "ok"
     probe_message: str | None = None
-    kernel_valid: bool | None = None
-    whole_model_valid: bool | None = None
+    objective_winner: bool | None = None
+    objective: str | None = None
+    failure_stage: str | None = None
+    seed: int | None = None
+    kernel_size: int = 1
+    workload: Mapping[str, object] = field(default_factory=dict)
     validator: str | None = None
-    validation_metrics: dict[str, dict[str, float | bool | None]] = field(default_factory=dict)
+    validation_metrics: Mapping[str, Mapping[str, float | bool | None]] = field(
+        default_factory=dict
+    )
     rejection_reason: str | None = None
 
     def __post_init__(self) -> None:
-        # Direct construction predates the diagnostic fields. An unsuccessful
-        # child has no numerical outcome; a successful legacy measurement does.
-        if self.kernel_valid is None and self.probe_status == "ok":
-            object.__setattr__(self, "kernel_valid", self.valid)
+        object.__setattr__(self, "spatial_shape", tuple(self.spatial_shape))
+        object.__setattr__(self, "parameters", tuple(tuple(item) for item in self.parameters))
+        object.__setattr__(self, "validation_metrics", freeze(self.validation_metrics))
+        object.__setattr__(self, "workload", freeze(self.workload))
+        for name in (
+            "reference_ms",
+            "candidate_ms",
+            "reference_peak_bytes",
+            "candidate_peak_bytes",
+        ):
+            object.__setattr__(self, name, freeze(getattr(self, name)))
 
     def to_primitive(self) -> dict[str, object]:
-        return asdict(self)
+        return primitive(self)
 
 
 def measurement_from_result(
@@ -53,15 +68,12 @@ def measurement_from_result(
     result: Mapping[str, object],
     *,
     checkpointing: str,
+    objective: Objective = "balanced",
+    workload: Mapping[str, object] | None = None,
 ) -> Measurement:
-    """Materialize context-free evidence for one workload reference.
-
-    Failed or absent results retain their planned identity with zero metrics,
-    ensuring synthesis explicitly falls back to the reference implementation.
-    """
-    ok = result.get("status") == "ok"
+    """Retain observed kernel facts, including partial results after a later failure."""
     key = case.key
-    return Measurement(
+    item = Measurement(
         family=key.family,
         direction=key.direction,
         phase=key.phase,
@@ -72,24 +84,44 @@ def measurement_from_result(
         out_channels=key.out_channels,
         dtype=key.dtype,
         checkpointing=checkpointing,
-        reference_ms=float(result.get("reference_ms", 0.0)) if ok else 0.0,
-        candidate_ms=float(result.get("candidate_ms", 0.0)) if ok else 0.0,
-        reference_peak_bytes=int(result.get("reference_peak_bytes", 0)) if ok else 0,
-        candidate_peak_bytes=int(result.get("candidate_peak_bytes", 0)) if ok else 0,
-        valid=ok and bool(result.get("valid", False)),
+        reference_ms=result.get("reference_ms", 0.0),
+        candidate_ms=result.get("candidate_ms", 0.0),
+        reference_peak_bytes=result.get("reference_peak_bytes", 0),
+        candidate_peak_bytes=result.get("candidate_peak_bytes", 0),
         parameters=key.parameters,
         probe_status=str(result.get("status", "missing")),
         probe_message=result.get("message"),
-        kernel_valid=bool(result.get("valid", False)) if ok else None,
+        kernel_valid=bool(result["valid"]) if "valid" in result else None,
+        objective=objective,
+        failure_stage=result.get("failure_stage"),
+        seed=result.get("seed"),
+        kernel_size=key.kernel_size,
+        workload=workload or {},
         validator=result.get("validator"),
         validation_metrics=dict(result.get("validation_metrics", {})),
         rejection_reason=result.get("rejection_reason"),
     )
+    return replace(item, objective_winner=candidate_wins(item, objective))
 
 
 def candidate_wins(item: Measurement, objective: Objective) -> bool:
     """Return whether a validated candidate satisfies the profile objective."""
-    if not item.valid or item.reference_ms <= 0 or item.candidate_ms <= 0:
+    if objective not in ("balanced", "throughput", "memory"):
+        raise ValueError(f"unknown profiling objective {objective!r}")
+    if item.kernel_valid is not True or item.probe_status != "ok":
+        return False
+    if any(
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not isfinite(value)
+        or value <= 0
+        for value in (
+            item.reference_ms,
+            item.candidate_ms,
+            item.reference_peak_bytes,
+            item.candidate_peak_bytes,
+        )
+    ):
         return False
     if objective == "throughput":
         return item.candidate_ms < item.reference_ms
@@ -104,41 +136,25 @@ def candidate_wins(item: Measurement, objective: Objective) -> bool:
     )
 
 
-def reconcile_measurements(measurements: Sequence[Measurement]) -> tuple[Measurement, ...]:
-    """Invalidate candidates that policy rules cannot distinguish from a rejection.
-
-    The identity includes exactly the emitted match fields plus family, direction,
-    and phase. Implementation and launch parameters select a candidate; they do not
-    constrain which workload matches it. Earlier numerical/whole-model failure
-    reasons take precedence; newly rejected candidates record reconciliation
-    as the cause without changing their independent validation outcomes.
-    """
-
-    def identity(item: Measurement) -> tuple[object, ...]:
-        return (
-            item.family,
-            item.direction,
-            item.phase,
-            item.batch,
-            item.spatial_shape,
-            item.in_channels,
-            item.out_channels,
-            item.dtype,
-            item.checkpointing,
-        )
-
-    rejected = {identity(item) for item in measurements if not item.valid}
-    return tuple(
-        replace(
-            item,
-            valid=False,
-            rejection_reason=item.rejection_reason
-            or "policy reconciliation rejected an indistinguishable rule context",
-        )
-        if item.valid and identity(item) in rejected
-        else item
-        for item in measurements
+def measurement_identity(item: Measurement) -> tuple[object, ...]:
+    """The policy match fields; candidate parameters do not constrain matching."""
+    return (
+        item.family,
+        item.direction,
+        item.phase,
+        item.batch,
+        item.spatial_shape,
+        item.in_channels,
+        item.out_channels,
+        item.dtype,
+        item.checkpointing,
     )
+
+
+def selectable_measurements(measurements: Sequence[Measurement]) -> tuple[Measurement, ...]:
+    """Exclude contradictory policy matches without modifying source evidence."""
+    rejected = {measurement_identity(item) for item in measurements if item.kernel_valid is False}
+    return tuple(item for item in measurements if measurement_identity(item) not in rejected)
 
 
 def synthesize_profile(
@@ -153,7 +169,7 @@ def synthesize_profile(
     campaign: Mapping[str, object] | None = None,
     merge_adjacent_batches: bool = True,
 ) -> OptimizationPolicy:
-    measurements = reconcile_measurements(measurements)
+    measurements = selectable_measurements(measurements)
     winners = sorted(
         (item for item in measurements if candidate_wins(item, objective)),
         key=lambda item: (
