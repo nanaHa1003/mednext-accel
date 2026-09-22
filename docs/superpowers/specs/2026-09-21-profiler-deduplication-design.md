@@ -2,21 +2,19 @@
 
 ## Purpose
 
-`mednext-accel profile` currently launches one subprocess for every isolated
-operator shape at every feasible batch size and repeats those measurements for
-each model variant and checkpoint context. MedNeXt Base at 128³ needs 48
-isolated kernel comparisons plus one compiled whole-model validation per
-feasible batch. Four feasible batches therefore require about 201 subprocesses
-including batch search. Selecting all three checkpoint contexts can approach
-three times that work even though checkpointing does not change an isolated
-kernel invocation.
+Before grouped execution, `mednext-accel profile` launched one subprocess for
+every isolated operator shape and repeated those measurements for each model
+variant and checkpoint context. MedNeXt Base at 128³ needs about 48 isolated
+kernel comparisons plus one compiled whole-model validation at its selected
+batch. Selecting all three checkpoint contexts could approach three times that
+work even though checkpointing does not change an isolated kernel invocation.
 
 The profiler will separate context-free kernel evidence from context-dependent
 whole-model validation. It will benchmark every unique kernel case once, group
 related cases into a small number of subprocesses, and validate only the
-boundaries of consecutive batches that produce the same complete operator
-decision. The generated optimization-profile schema and model construction API
-remain compatible.
+maximum feasible batch selected for each workload. Diagnostic batch-search
+probes never enter the kernel matrix or validation plan. The generated
+optimization-profile schema and model construction API remain compatible.
 
 ## Scope
 
@@ -25,7 +23,7 @@ This change covers:
 - campaign-wide discovery and batch search before kernel benchmarking;
 - deduplication across model variants, output classes, and checkpoint contexts;
 - grouped kernel subprocesses with failure isolation;
-- boundary-based compiled whole-model validation;
+- selected-batch compiled whole-model validation;
 - an experiment plan, completed counts, average durations, and ETA;
 - context-specific materialization of shared kernel measurements for the
   existing profile synthesizer.
@@ -49,11 +47,11 @@ Static plan
   workloads: 1
   unique pointwise shapes: 30
   unique depthwise phase/shape pairs: 18
-  kernel groups per feasible batch: 5
+  kernel groups per selected batch: 5
 ```
 
-This is a static shape count rather than a promised total because feasible
-batches are not known yet.
+This is a static shape count rather than a promised total because the selected
+batch is not known yet.
 
 ### 2. Context-specific batch search
 
@@ -117,53 +115,41 @@ does not stop the group.
 Subprocess isolation remains the failure boundary. If a grouped child times
 out, crashes, or cannot recover from OOM, the parent bisects the group and
 retries both halves. Recursion stops at a single case, which is recorded as a
-failed measurement. Healthy campaigns therefore pay for five subprocesses per
-batch; problematic cases retain the isolation of the current implementation.
+failed measurement. Healthy workloads therefore pay for five subprocesses at
+their selected batch; problematic cases retain the same isolation.
 
-Once batch search supplies the feasible batches, the CLI reports both logical
-experiments and physical subprocess groups:
+Once batch search supplies one maximum feasible batch per workload, the CLI
+reports both logical experiments and physical subprocess groups:
 
 ```text
-Execution plan
-  feasible batches: 1–4
-  unique kernel experiments: 192
-  grouped kernel subprocesses: 20
+kernel plan: 5 planned groups, 48 unique experiments, 48 requested references
 ```
 
 Progress includes group and experiment counts. Average time and ETA use
 completed groups, while the experiment count shows coverage:
 
 ```text
-Kernel groups 7/20 · experiments 71/192
-avg 18.4 s/group · elapsed 00:02:09 · ETA 00:03:59
+Kernel groups 3/5 · experiments 31/48
+avg 18.4 s/group · elapsed 00:00:55 · ETA 00:00:37
 ```
 
-### 5. Decision segmentation and validation
+### 5. Selected-batch validation
 
 Shared isolated results are converted into a complete decision signature for
-each workload and measured feasible batch. The signature contains every
-selected implementation and its launch parameters for the workload's discovered
+each workload at its selected maximum. The signature contains every selected
+implementation and its launch parameters for the workload's discovered
 operators.
 
-Consecutive measured integer batches with the same signature form a decision
-segment. Gaps in the adaptive batch-search sample are not treated as consecutive
-and therefore do not create unsupported interpolated intervals.
+Each feasible workload contributes exactly one whole-model validation endpoint
+at that selected batch. Intermediate feasible search probes are diagnostics;
+they do not create kernel cases, decision segments, or validation endpoints.
+An infeasible workload contributes none.
 
-Each segment validates:
-
-- its first batch;
-- its last batch when different from the first.
-
-Because adjacent segments validate both sides of a decision transition, no
-additional transition probes are required. A one-batch segment runs one
-validation. Validation remains specific to model variant, checkpoint context,
-spatial shape, channel configuration, and compile mode.
-
-If every representative passes the campaign objective, all measurements in the
-segment remain eligible. If any representative fails, every candidate
-measurement in that segment is marked invalid and the generated profile uses
-reference implementations there. This deliberately prefers a coarse safe
-fallback over publishing a partially validated segment.
+Validation remains specific to model variant, checkpoint context, spatial
+shape, channel configuration, and compile mode. If the selected endpoint passes
+the campaign objective, its candidate measurements remain eligible. If it
+fails, every candidate measurement for that workload and selected batch is
+marked invalid and the generated profile uses reference implementations there.
 
 Whole-model validation has its own progress and average duration because its
 compiled steps are much slower than kernel groups. Mixing both populations into
@@ -199,7 +185,8 @@ profile.
   implementation for all workload references to that exact case.
 - A grouped child infrastructure failure triggers recursive bisection before a
   case is declared failed.
-- A failed whole-model representative invalidates its complete decision segment.
+- A failed whole-model endpoint invalidates that workload's selected-batch
+  candidate measurements.
 - An unexpected parent-process exception remains fatal; the CLI closes its Rich
   display and reports the exception normally.
 - `--progress quiet` emits no progress diagnostics. Final CLI success output and
@@ -215,8 +202,9 @@ mednext-accel profile [campaign.yaml] [--progress auto|plain|quiet]
 
 No new required campaign fields are introduced. Internally, the runner gains
 immutable records for discovered workloads, kernel-case keys, grouped requests,
-raw kernel results, and validation segments. The child protocol gains a batched
-kernel request while retaining the existing single model-probe request.
+raw kernel results, and selected-batch validation requests. The child protocol
+gains a batched kernel request while retaining the existing single model-probe
+request.
 
 Progress events distinguish adaptive search probes, kernel groups, logical
 experiments, and whole-model validations. Reporters calculate averages only
@@ -231,9 +219,10 @@ CPU tests will cover:
 - distinct batch, shape, phase, dtype, or launch parameters remain distinct;
 - group construction creates the five expected categories;
 - group failure recursively bisects and preserves successful results;
-- decision signatures form only consecutive segments;
-- segment endpoints are selected exactly once;
-- one failed endpoint invalidates the complete segment;
+- every feasible workload contributes at most one selected batch;
+- diagnostic search probes do not enter kernel or validation plans;
+- the selected endpoint is validated exactly once;
+- one failed endpoint invalidates that workload's selected-batch candidates;
 - context-specific measurements retain checkpoint matching;
 - batch progress advances with an unknown total and reports average time;
 - post-search stages expose exact totals and ETA;

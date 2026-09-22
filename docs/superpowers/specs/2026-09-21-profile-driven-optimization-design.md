@@ -199,10 +199,11 @@ parsing to the same primitive mapping. A profile contains:
 
 - schema version and profile identity;
 - target vendor and optional SM architecture;
-- provenance including GPU, VRAM, PyTorch, CUDA, cuDNN, Triton, package commit,
-  command, timestamps, and the complete normalized campaign with every workload
-  identity;
-- implementation versions;
+- provenance including collection time, driver, GPU identity, SM, VRAM,
+  platform, Python, mednext-accel, PyTorch, CUDA, cuDNN, Triton, generator,
+  objective, compile mode, execution counts, and the complete normalized
+  campaign with every workload identity;
+- implementation identifiers and retained launch parameters;
 - operator-family defaults;
 - ordered interval and formula rules;
 - exact full-model overrides;
@@ -502,7 +503,7 @@ GitHub CI and required when producing a bundled profile.
 
 A bundled SM profile requires:
 
-- complete environment and command provenance;
+- complete recorded environment, campaign, and workload provenance;
 - successful schema and registry validation;
 - numerical validation for every selected implementation;
 - operator-level latency and memory measurements;

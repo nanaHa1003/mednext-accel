@@ -39,10 +39,10 @@ defaults. Approximate implementations require opt-in. Unknown architectures and
 cross-SM user profiles warn once and continue.
 
 The profiler is a separate explicit operation. `mednext-accel profile` detects
-GPU and VRAM, probes full compiled steps to find feasible batches, benchmarks
-operator phases in isolated child processes, validates numerical output, and
-writes one merged configuration. Model construction and first forward never
-benchmark or write files.
+GPU and VRAM, probes full compiled steps to find one maximum feasible batch per
+workload, benchmarks operator phases at that selected batch in isolated child
+processes, validates numerical output, and writes one merged configuration.
+Model construction and first forward never benchmark or write files.
 
 Triton imports remain lazy. Importing the package, using CPU/reference execution,
 loading checkpoints, and exporting evaluation graphs do not require Triton.
