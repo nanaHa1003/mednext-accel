@@ -56,7 +56,7 @@ def test_depthwise_probe_executes_planned_parameters_and_labels_evidence(
     )
     monkeypatch.setattr(torch.cuda, "empty_cache", lambda: None)
     monkeypatch.setattr(
-        runner, "_timed", lambda function: (1.0 if function() is not None else 0.0, 64)
+        runner, "_timed", lambda function, **kwargs: (1.0 if function() is not None else 0.0, 64)
     )
     calls = []
 

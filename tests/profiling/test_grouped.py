@@ -1,6 +1,6 @@
 import pytest
 
-from mednext_accel.profiling.grouped import run_group_with_bisection
+from mednext_accel.profiling.grouped import case_payload, run_group_with_bisection
 from mednext_accel.profiling.matrix import KernelCase, KernelCaseKey, KernelGroup
 
 
@@ -144,17 +144,29 @@ def test_unhashable_case_identifier_is_bisected_and_accounted_for() -> None:
     assert sum(item[2] for item in attempt_events if item[0] == "completed") == 3
 
 
-def test_campaign_seed_is_preserved_through_bisection_and_failure():
-    cases = tuple(make_case(value) for value in (8, 16))
-    group = KernelGroup("pointwise", 1, cases)
-    seeds = []
+def test_case_seeds_are_stable_across_order_bisection_and_failures():
+    cases = tuple(make_case(value) for value in (8, 16, 32))
+    observed = {}
 
     def invoke(payload):
-        seeds.extend(item["seed"] for item in payload["cases"])
+        for item in payload["cases"]:
+            observed.setdefault(item["case_id"], set()).add(item["seed"])
         if len(payload["cases"]) > 1:
             return {"status": "timeout"}
+        if payload["cases"][0]["case_id"] == cases[1].identifier:
+            return {"status": "error", "message": "isolated failure"}
         return ok_results(payload)
 
-    results = run_group_with_bisection(group, invoke, seed=37)
-    assert seeds == [37, 37, 37, 37]
-    assert all(item["seed"] == 37 for item in results.values())
+    first = run_group_with_bisection(KernelGroup("pointwise", 1, cases), invoke, seed=37)
+    reverse = run_group_with_bisection(
+        KernelGroup("pointwise", 1, tuple(reversed(cases))), invoke, seed=37
+    )
+    seeds = [first[case.identifier]["seed"] for case in cases]
+    assert len(set(seeds)) == 3, "different case identities need different random inputs"
+    assert all(0 <= seed < 2**63 for seed in seeds)
+    assert all(len(values) == 1 for values in observed.values())
+    assert first == reverse
+    assert first[cases[1].identifier]["status"] == "error"
+    assert all(
+        case_payload(case, seed=38)["seed"] != seed for case, seed in zip(cases, seeds, strict=True)
+    )

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, replace
+from hashlib import sha256
 from typing import Literal
 
 from .matrix import KernelCase, KernelGroup
@@ -12,10 +13,16 @@ Invoke = Callable[[dict[str, object]], dict[str, object]]
 AttemptCallback = Callable[[Literal["scheduled", "completed"], int, int], None]
 
 
+def case_seed(case: KernelCase, campaign_seed: int) -> int:
+    """Derive a stable signed-63-bit seed independently of scheduling/order."""
+    identity = f"mednext-accel-kernel-seed-v1:{campaign_seed}:{case.identifier}"
+    return int.from_bytes(sha256(identity.encode()).digest()[:8], "big") & (2**63 - 1)
+
+
 def case_payload(case: KernelCase, *, seed: int = 0) -> dict[str, object]:
     """Serialize one kernel case for the child protocol."""
 
-    return {"case_id": case.identifier, "seed": seed, **asdict(case.key)}
+    return {"case_id": case.identifier, "seed": case_seed(case, seed), **asdict(case.key)}
 
 
 def response_matches(group: KernelGroup, result: Mapping[str, object]) -> bool:
@@ -62,10 +69,19 @@ def run_group_with_bisection(
         if result.get("status") == "ok":
             items = result["results"]
             assert isinstance(items, list)
-            return {str(item["case_id"]): {"seed": seed, **item} for item in items}
+            seeds = {case.identifier: case_seed(case, seed) for case in current.cases}
+            return {
+                str(item["case_id"]): {"seed": seeds[item["case_id"]], **item} for item in items
+            }
         if len(current.cases) == 1:
             case = current.cases[0]
-            return {case.identifier: {"case_id": case.identifier, "seed": seed, **result}}
+            return {
+                case.identifier: {
+                    "case_id": case.identifier,
+                    "seed": case_seed(case, seed),
+                    **result,
+                }
+            }
         midpoint = len(current.cases) // 2
         left = replace(current, cases=current.cases[:midpoint])
         right = replace(current, cases=current.cases[midpoint:])

@@ -6,7 +6,8 @@ import argparse
 import gc
 import json
 import sys
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
+from functools import wraps
 
 from ..optimization.descriptors import ExecutionContext
 from ..optimization.policy import policy_to_primitive
@@ -58,24 +59,89 @@ def _factory(variant: str):
     }[variant]
 
 
-def _timed(function, *, warmup: int = 2, repetitions: int = 5) -> tuple[float, int]:
+@dataclass
+class _ProbeRecord:
+    stage: str
+    result: dict[str, object] = field(default_factory=dict)
+
+    def set_stage(self, stage: str) -> None:
+        self.stage = stage
+
+
+def _record_probe(kind):
+    """Keep completed scalar evidence if a later allocation or operation fails."""
+
+    def decorate(function):
+        @wraps(function)
+        def recorded(payload):
+            import torch
+
+            probe = _ProbeRecord(f"{kind}.setup", {"seed": int(payload.get("seed", 0))})
+            try:
+                probe.result.update(function(payload, probe))
+            except Exception as error:
+                probe.result.update(
+                    status="oom" if isinstance(error, torch.cuda.OutOfMemoryError) else "error",
+                    failure_stage=probe.stage,
+                    message=f"{type(error).__name__}: {error}",
+                )
+            return probe.result
+
+        return recorded
+
+    return decorate
+
+
+def _validate_pair(probe, name, native, candidate):
+    # This frame owns precisely one detached reference/candidate pair. Returning
+    # scalar metrics releases both tensors before the next component starts.
+    probe.stage = f"validation.{name}.reference"
+    expected = native()
+    probe.stage = f"validation.{name}.candidate"
+    actual = candidate()
+    probe.stage = f"validation.{name}.metrics"
+    result = validate_components({name: actual}, {name: expected})
+    probe.result["validator"] = result["validator"]
+    probe.result.setdefault("validation_metrics", {}).update(result["validation_metrics"])
+    if probe.result.get("rejection_reason") is None:
+        probe.result["rejection_reason"] = result["rejection_reason"]
+
+
+def _time_pair(probe, native, candidate):
+    for side, function in (("reference", native), ("candidate", candidate)):
+        probe.stage = f"timing.{side}"
+        duration, peak = _timed(
+            function, on_stage=lambda stage, side=side: probe.set_stage(f"timing.{side}.{stage}")
+        )
+        probe.result.update({f"{side}_ms": duration, f"{side}_peak_bytes": peak})
+
+
+def _timed(function, *, warmup: int = 2, repetitions: int = 5, on_stage=None) -> tuple[float, int]:
     import torch
 
+    stage = on_stage if on_stage is not None else lambda value: None
+    stage("warmup")
     for _ in range(warmup):
         function()
+    stage("synchronize")
     torch.cuda.synchronize()
+    stage("memory_reset")
     torch.cuda.reset_peak_memory_stats()
     start = torch.cuda.Event(enable_timing=True)
     end = torch.cuda.Event(enable_timing=True)
+    stage("measurement")
     start.record()
     for _ in range(repetitions):
         function()
     end.record()
     torch.cuda.synchronize()
-    return start.elapsed_time(end) / repetitions, torch.cuda.max_memory_allocated()
+    duration = start.elapsed_time(end) / repetitions
+    stage("memory_read")
+    return duration, torch.cuda.max_memory_allocated()
 
 
-def _model_probe(payload: dict[str, object]) -> dict[str, object]:
+@_record_probe("model")
+def _model_probe(payload: dict[str, object], probe: _ProbeRecord) -> dict[str, object]:
     import torch
 
     seed = int(payload.get("seed", 0))
@@ -83,6 +149,7 @@ def _model_probe(payload: dict[str, object]) -> dict[str, object]:
     workload = payload["workload"]
     assert isinstance(workload, dict)
     optimization = payload.get("optimization", "reference")
+    probe.stage = "model.initialization"
     model = (
         _factory(str(workload["variant"]))(
             in_channels=int(workload["in_channels"]),
@@ -93,29 +160,45 @@ def _model_probe(payload: dict[str, object]) -> dict[str, object]:
         .cuda()
         .train()
     )
+    probe.stage = "model.compile"
     compile_mode = str(payload.get("compile_mode", "default"))
     model.compile(mode=compile_mode, fullgraph=True)
     batch = int(payload["batch"])
     spatial = tuple(int(item) for item in workload["spatial"])
+    probe.stage = "model.allocation.input"
     sample = torch.randn(
         batch, int(workload["in_channels"]), *spatial, device="cuda", dtype=torch.bfloat16
     )
+    probe.stage = "model.optimizer.initialization"
     optimizer = torch.optim.AdamW(model.parameters())
 
     last_loss = None
+    timing_stage = "model.timing"
+
+    def on_stage(stage):
+        nonlocal timing_stage
+        timing_stage = f"model.timing.{stage}"
+        probe.stage = timing_stage
 
     def step() -> None:
         nonlocal last_loss
+        probe.stage = f"{timing_stage}.zero_grad"
         optimizer.zero_grad(set_to_none=True)
+        probe.stage = f"{timing_stage}.forward"
         with torch.autocast("cuda", dtype=torch.bfloat16):
             output = model(sample)
             primary = output[0] if isinstance(output, (tuple, list)) else output
             loss = primary.float().square().mean()
+        probe.stage = f"{timing_stage}.backward"
         loss.backward()
+        probe.stage = f"{timing_stage}.optimizer"
         optimizer.step()
         last_loss = loss.detach()
 
-    step_ms, peak = _timed(step, warmup=1, repetitions=1)
+    probe.stage = timing_stage
+    step_ms, peak = _timed(step, warmup=1, repetitions=1, on_stage=on_stage)
+    probe.result.update(step_ms=step_ms, peak_bytes=peak)
+    probe.stage = "model.diagnostics"
     return {
         "status": "ok",
         "seed": seed,
@@ -125,7 +208,8 @@ def _model_probe(payload: dict[str, object]) -> dict[str, object]:
     }
 
 
-def _pointwise_probe(payload: dict[str, object]) -> dict[str, object]:
+@_record_probe("pointwise")
+def _pointwise_probe(payload: dict[str, object], probe: _ProbeRecord) -> dict[str, object]:
     import torch
     from torch.nn import functional as functional
 
@@ -135,50 +219,64 @@ def _pointwise_probe(payload: dict[str, object]) -> dict[str, object]:
     channels = int(payload["in_channels"])
     outputs = int(payload["out_channels"])
     spatial = tuple(int(item) for item in payload["spatial_shape"])
+    probe.stage = "allocation.input"
     x = torch.randn(
         batch, channels, *spatial, device="cuda", dtype=torch.bfloat16, requires_grad=True
     )
+    probe.stage = "allocation.parameters"
     weight = torch.randn(
         outputs, channels, 1, 1, 1, device="cuda", dtype=torch.float32, requires_grad=True
     )
     bias = torch.randn(outputs, device="cuda", dtype=torch.float32, requires_grad=True)
+    probe.stage = "allocation.gradient"
     gradient = torch.randn(batch, outputs, *spatial, device="cuda", dtype=torch.bfloat16)
 
-    def native():
+    def native_forward(sample, matrix, offset):
         with torch.autocast("cuda", dtype=torch.bfloat16):
-            output = functional.conv3d(x, weight, bias)
-        return (output, *torch.autograd.grad(output, (x, weight, bias), gradient))
+            return functional.conv3d(sample, matrix, offset)
 
-    def candidate():
+    def candidate_forward(sample, matrix, offset):
         with torch.autocast("cuda", dtype=torch.bfloat16):
-            flat = x.flatten(2)
-            matrix = weight.flatten(1)
+            flat = sample.flatten(2)
+            matrix = matrix.flatten(1)
             output = torch.stack(
-                [torch.addmm(bias[:, None], matrix, sample) for sample in flat.unbind()]
-            ).reshape(batch, outputs, *spatial)
+                [torch.addmm(offset[:, None], matrix, item) for item in flat.unbind()]
+            )
+            return output.reshape(batch, outputs, *spatial)
+
+    def component(forward, name):
+        if name == "output":
+            with torch.no_grad():
+                return forward(x, weight, bias)
+        # Only one gradient is requested and only its operand needs a graph.
+        # Each call frees its forward/graph before the other side is evaluated.
+        values = tuple(
+            value.detach().requires_grad_(key == name)
+            for key, value in zip(("dX", "dW", "dB"), (x, weight, bias), strict=True)
+        )
+        target = values[("dX", "dW", "dB").index(name)]
+        output = forward(*values)
+        return torch.autograd.grad(output, (target,), gradient)[0].detach()
+
+    for name in ("output", "dX", "dW", "dB"):
+        _validate_pair(
+            probe,
+            name,
+            lambda name=name: component(native_forward, name),
+            lambda name=name: component(candidate_forward, name),
+        )
+    probe.result["valid"] = probe.result["rejection_reason"] is None
+
+    def training(forward):
+        output = forward(x, weight, bias)
         return (output, *torch.autograd.grad(output, (x, weight, bias), gradient))
 
-    expected, actual = native(), candidate()
-    components = ("output", "dX", "dW", "dB")
-    validation = validate_components(
-        dict(zip(components, actual, strict=True)), dict(zip(components, expected, strict=True))
-    )
-    del expected, actual
-    native_ms, native_peak = _timed(native)
-    candidate_ms, candidate_peak = _timed(candidate)
-    return {
-        "status": "ok",
-        **validation,
-        "seed": seed,
-        "reference_ms": native_ms,
-        "candidate_ms": candidate_ms,
-        "reference_peak_bytes": native_peak,
-        "candidate_peak_bytes": candidate_peak,
-        "parameters": [],
-    }
+    _time_pair(probe, lambda: training(native_forward), lambda: training(candidate_forward))
+    return {"status": "ok", "parameters": []}
 
 
-def _depthwise_probe(payload: dict[str, object]) -> dict[str, object]:
+@_record_probe("depthwise")
+def _depthwise_probe(payload: dict[str, object], probe: _ProbeRecord) -> dict[str, object]:
     import torch
     from torch.nn import functional as functional
 
@@ -207,14 +305,19 @@ def _depthwise_probe(payload: dict[str, object]) -> dict[str, object]:
     )
     launch = dict(parameters)
     stride = 2 if direction in ("downsample", "transpose") else 1
+    probe.stage = "allocation.input"
     x = torch.randn(batch, channels, *spatial, device="cuda", dtype=torch.bfloat16)
+    probe.stage = "allocation.parameters"
     weight = torch.randn(channels, 1, kernel, kernel, kernel, device="cuda", dtype=torch.bfloat16)
     padding = kernel // 2
+    probe.stage = "allocation.gradient_shape"
     if direction == "transpose":
         output = functional.conv_transpose3d(x, weight, stride=2, padding=padding, groups=channels)
     else:
         output = functional.conv3d(x, weight, stride=stride, padding=padding, groups=channels)
+    probe.stage = "allocation.gradient"
     gradient = torch.randn_like(output)
+    del output
 
     if direction == "transpose" and phase == "backward_weight":
 
@@ -317,22 +420,12 @@ def _depthwise_probe(payload: dict[str, object]) -> dict[str, object]:
     else:
         raise ValueError(f"unsupported depthwise probe {direction}/{phase}")
 
-    expected, actual = native(), candidate()
+    probe.result.update(implementation=implementation, parameters=parameters)
     component = "dX" if phase == "backward_input" else "dW"
-    validation = validate_components({component: actual}, {component: expected})
-    native_ms, native_peak = _timed(native)
-    candidate_ms, candidate_peak = _timed(candidate)
-    return {
-        "status": "ok",
-        **validation,
-        "seed": seed,
-        "implementation": implementation,
-        "reference_ms": native_ms,
-        "candidate_ms": candidate_ms,
-        "reference_peak_bytes": native_peak,
-        "candidate_peak_bytes": candidate_peak,
-        "parameters": parameters,
-    }
+    _validate_pair(probe, component, native, candidate)
+    probe.result["valid"] = probe.result["rejection_reason"] is None
+    _time_pair(probe, native, candidate)
+    return {"status": "ok"}
 
 
 def _kernel_group_probe(payload: dict[str, object]) -> dict[str, object]:
@@ -353,9 +446,13 @@ def _kernel_group_probe(payload: dict[str, object]) -> dict[str, object]:
             else:
                 raise ValueError(f"unknown kernel family {family!r}")
         except torch.cuda.OutOfMemoryError:
-            result = {"status": "oom", "message": "CUDA out of memory"}
+            result = {"status": "oom", "message": "CUDA out of memory", "failure_stage": "dispatch"}
         except Exception as error:
-            result = {"status": "error", "message": f"{type(error).__name__}: {error}"}
+            result = {
+                "status": "error",
+                "message": f"{type(error).__name__}: {error}",
+                "failure_stage": "dispatch",
+            }
         finally:
             gc.collect()
             torch.cuda.empty_cache()
@@ -386,7 +483,12 @@ def _invoke(payload: dict[str, object], *, timeout: float = 900) -> dict[str, ob
         input=json.dumps(payload),
     )
     if result.status != "ok":
-        return {"status": result.status, "message": result.message}
+        return {
+            "failure_stage": "subprocess",
+            **result.payload,
+            "status": result.status,
+            "message": result.message,
+        }
     return result.payload
 
 
@@ -812,9 +914,13 @@ def main(argv: list[str] | None = None) -> int:
         payload = sys.stdin.read() if arguments.child == "-" else arguments.child
         result = _child(json.loads(payload))
     except torch.cuda.OutOfMemoryError:  # type: ignore[name-defined]
-        result = {"status": "oom", "message": "CUDA out of memory"}
+        result = {"status": "oom", "message": "CUDA out of memory", "failure_stage": "dispatch"}
     except Exception as error:
-        result = {"status": "error", "message": f"{type(error).__name__}: {error}"}
+        result = {
+            "status": "error",
+            "message": f"{type(error).__name__}: {error}",
+            "failure_stage": "dispatch",
+        }
     print(json.dumps(result))
     return 0
 

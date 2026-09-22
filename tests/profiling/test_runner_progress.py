@@ -168,11 +168,13 @@ def test_kernel_group_child_converts_case_exceptions_and_continues(monkeypatch) 
                 "case_id": cases[0].identifier,
                 "status": "oom",
                 "message": "CUDA out of memory",
+                "failure_stage": "dispatch",
             },
             {
                 "case_id": cases[1].identifier,
                 "status": "error",
                 "message": "ValueError: broken case",
+                "failure_stage": "dispatch",
             },
         ],
     }
