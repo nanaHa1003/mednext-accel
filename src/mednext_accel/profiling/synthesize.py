@@ -109,7 +109,9 @@ def reconcile_measurements(measurements: Sequence[Measurement]) -> tuple[Measure
 
     The identity includes exactly the emitted match fields plus family, direction,
     and phase. Implementation and launch parameters select a candidate; they do not
-    constrain which workload matches it.
+    constrain which workload matches it. Earlier numerical/whole-model failure
+    reasons take precedence; newly rejected candidates record reconciliation
+    as the cause without changing their independent validation outcomes.
     """
 
     def identity(item: Measurement) -> tuple[object, ...]:
@@ -127,7 +129,14 @@ def reconcile_measurements(measurements: Sequence[Measurement]) -> tuple[Measure
 
     rejected = {identity(item) for item in measurements if not item.valid}
     return tuple(
-        replace(item, valid=False) if item.valid and identity(item) in rejected else item
+        replace(
+            item,
+            valid=False,
+            rejection_reason=item.rejection_reason
+            or "schema-v1 reconciliation rejected an indistinguishable rule context",
+        )
+        if item.valid and identity(item) in rejected
+        else item
         for item in measurements
     )
 

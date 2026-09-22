@@ -233,3 +233,46 @@ def test_legacy_direct_measurement_defaults_preserve_synthesis():
     assert item.validator is None
     assert item.validation_metrics == {}
     assert candidate_wins(item, "balanced")
+
+
+@pytest.mark.parametrize(
+    ("kernel_valid", "whole_model_valid", "reason"),
+    [
+        (False, True, "dW: relative L2 error must be below 0.02"),
+        (True, False, "whole-model validation rejected segment"),
+    ],
+)
+def test_serialized_reconciliation_explains_rejection_and_preserves_prior_evidence(
+    kernel_valid, whole_model_valid, reason
+):
+    import json
+
+    from mednext_accel.optimization.schema import parse_profile, profile_to_primitive
+
+    candidate = replace(measured(2, 4.0, 1.0), whole_model_valid=True)
+    rejected = replace(
+        candidate,
+        valid=False,
+        kernel_valid=kernel_valid,
+        whole_model_valid=whole_model_valid,
+        rejection_reason=reason,
+    )
+    profile = synthesize_profile(
+        [candidate, rejected], name="conflicting-contexts", sm=(12, 0), objective="balanced"
+    )
+    serialized = json.loads(json.dumps(profile_to_primitive(profile)))
+    roundtrip = parse_profile(serialized)
+    accepted_kernel, original_rejection = roundtrip.measurements
+
+    assert accepted_kernel["kernel_valid"] is True
+    assert accepted_kernel["whole_model_valid"] is True
+    assert accepted_kernel["valid"] is False
+    assert accepted_kernel["rejection_reason"] == (
+        "schema-v1 reconciliation rejected an indistinguishable rule context"
+    )
+    assert original_rejection["kernel_valid"] is kernel_valid
+    assert original_rejection["whole_model_valid"] is whole_model_valid
+    assert original_rejection["valid"] is False
+    # The first rejection remains authoritative; reconciliation does not hide it.
+    assert original_rejection["rejection_reason"] == reason
+    assert roundtrip.rules == ()
