@@ -252,3 +252,86 @@ def test_concurrent_policy_replacement_does_not_mix_result_with_other_runs_evide
         load_policy(result.artifacts.policy_path).evidence[-1].file
         == competing[1].evidence_path.name
     )
+
+
+def test_frozen_clock_advances_past_existing_candidates_without_overwriting(tmp_path, monkeypatch):
+    policy, evidence = records()
+    monkeypatch.setattr(api.time, "time_ns", lambda: 123)
+    initial = publish(policy, evidence, tmp_path / "sm120-local.policy.yaml")
+    raw = initial.evidence_path.read_bytes()
+    digest = hashlib.sha256(raw).hexdigest()
+    blocked = [
+        tmp_path / f"sm120-local.{stamp}-{digest[:12]}.evidence.json" for stamp in range(124, 128)
+    ]
+    for path in blocked:
+        path.write_bytes(b"preexisting evidence must remain untouched")
+    real_link = api.os.link
+    attempts = []
+
+    def checked_link(source, destination):
+        # Fail immediately on the original infinite retry, without waiting for a timeout.
+        assert destination not in attempts, "publication retried the same occupied candidate"
+        attempts.append(destination)
+        real_link(source, destination)
+
+    monkeypatch.setattr(api.os, "link", checked_link)
+    second = publish(policy, evidence, initial.policy_path)
+    assert second.evidence_path.name == f"sm120-local.128-{digest[:12]}.evidence.json"
+    assert len(attempts) == 6
+    assert second.evidence_path.read_bytes() == raw == initial.evidence_path.read_bytes()
+    assert all(
+        path.read_bytes() == b"preexisting evidence must remain untouched" for path in blocked
+    )
+    assert load_policy(second.policy_path).evidence[-1].file == second.evidence_path.name
+    assert not list(tmp_path.glob(".*"))
+
+
+def test_concurrent_publishers_with_frozen_clock_use_distinct_complete_evidence(
+    tmp_path, monkeypatch
+):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier, local
+
+    policy, evidence = records()
+    monkeypatch.setattr(api.time, "time_ns", lambda: 123)
+    barrier = Barrier(4)
+    state = local()
+    real_link = api.os.link
+
+    def synchronized_link(source, destination):
+        if not hasattr(state, "attempts"):
+            state.attempts = set()
+            barrier.wait(timeout=10)
+        assert destination not in state.attempts, "publication retried an occupied candidate"
+        state.attempts.add(destination)
+        real_link(source, destination)
+
+    monkeypatch.setattr(api.os, "link", synchronized_link)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = [
+            pool.submit(publish, policy, evidence, tmp_path / "sm120-local.policy.yaml")
+            for _ in range(4)
+        ]
+        results = [future.result(timeout=10) for future in futures]
+    paths = {result.evidence_path for result in results}
+    assert len(paths) == 4
+    raw = next(iter(paths)).read_bytes()
+    digest = hashlib.sha256(raw).hexdigest()
+    assert {path.name for path in paths} == {
+        f"sm120-local.{stamp}-{digest[:12]}.evidence.json" for stamp in range(123, 127)
+    }
+    assert all(path.read_bytes() == raw for path in paths)
+    assert json.loads(raw) == evidence.to_primitive()
+    stored = load_policy(results[0].policy_path)
+    assert stored.evidence[-1].sha256 == digest
+    assert stored.evidence[-1].file in {path.name for path in paths}
+    assert len(list(tmp_path.iterdir())) == 5
+
+
+@pytest.mark.parametrize("suffix", [".yaml", ".yml", ".YAML", ".YML", ".yAmL", ".yMl"])
+def test_supported_policy_suffixes_preserve_evidence_filename_and_loading(tmp_path, suffix):
+    policy, evidence = records()
+    artifacts = publish(policy, evidence, tmp_path / f"sm120-local.policy{suffix}")
+    assert artifacts.evidence_path.name.startswith("sm120-local.")
+    assert ".policy." not in artifacts.evidence_path.name
+    assert load_policy(artifacts.policy_path).evidence[-1].file == artifacts.evidence_path.name

@@ -24,15 +24,26 @@ def test_distributions_exclude_local_review_scratch_and_cache_files(tmp_path: Pa
     )
     artifacts = (
         ".superpowers/sdd/review.md",
-        "sm89-local.json",
-        "sm89-local.123-abc.evidence.json",
-        "sm89-local.policy.yaml",
         "dist/final-fix-scratch/probe.json",
         ".pytest_cache/results.json",
         ".ruff_cache/checks.json",
         "src/mednext_accel/__pycache__/local.pyc",
     )
-    for name in artifacts:
+    local_artifacts = tuple(
+        f"{directory}{name}"
+        for directory in ("", "nested/", "src/mednext_accel/", "src/mednext_accel/nested/")
+        for name in (
+            "sm89-local.json",
+            "sm89-local.123-abc.evidence.json",
+            "sm89-local.policy.yaml",
+            "sm89-local.policy.yml",
+            "sm89-local.policy.YAML",
+            "sm89-local.policy.YML",
+            "sm89-local.policy.yAmL",
+            "sm89-local.policy.yMl",
+        )
+    )
+    for name in artifacts + local_artifacts:
         artifact = project / name
         artifact.parent.mkdir(parents=True, exist_ok=True)
         artifact.write_text("local artifact must not ship")
@@ -51,7 +62,9 @@ def test_distributions_exclude_local_review_scratch_and_cache_files(tmp_path: Pa
         for profile in ("shared-nvidia", "sm86", "sm89", "sm120"):
             assert any(name.endswith(f"mednext_accel/policies/{profile}.yaml") for name in names)
         assert not any(
-            name.endswith(("-local.json", ".evidence.json", "-local.policy.yaml"))
+            name.lower().endswith(
+                ("-local.json", ".evidence.json", "-local.policy.yaml", "-local.policy.yml")
+            )
             or "/profiles/" in name
             for name in names
         )
@@ -104,3 +117,28 @@ assert report.decisions
 assert 'site-packages' in mednext_accel.__file__
 """
     subprocess.run([str(python), "-c", program], cwd=outside_repository, check=True)
+
+
+@pytest.mark.parametrize("suffix", ["yaml", "yml", "YAML", "YML", "yAmL", "yMl"])
+@pytest.mark.parametrize(
+    "directory", ["", "nested/", "src/mednext_accel/", "src/mednext_accel/nested/"]
+)
+def test_git_ignores_local_publication_artifacts_at_every_supported_location(
+    tmp_path, suffix, directory
+):
+    repository = Path(__file__).parents[1]
+    shutil.copy2(repository / ".gitignore", tmp_path / ".gitignore")
+    subprocess.run(["git", "init", "--quiet", str(tmp_path)], check=True)
+    paths = [
+        f"{directory}sm89-local.policy.{suffix}",
+        f"{directory}sm89-local.123-abc.evidence.json",
+    ]
+    result = subprocess.run(
+        ["git", "check-ignore", "--", *paths],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0
+    assert set(result.stdout.splitlines()) == set(paths)

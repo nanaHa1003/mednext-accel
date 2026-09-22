@@ -110,14 +110,16 @@ def _publish_profiling_artifacts(
     stem = destination.name.removesuffix(destination.suffix).removesuffix(".policy")
     temporary = _write_temporary(directory, f".{stem}.evidence.", raw)
     try:
+        timestamp = time.time_ns()
         while True:
-            evidence_path = directory / f"{stem}.{time.time_ns()}-{digest[:12]}.evidence.json"
+            evidence_path = directory / f"{stem}.{timestamp}-{digest[:12]}.evidence.json"
             try:
                 # An atomic no-clobber publication of already complete bytes.
                 os.link(temporary, evidence_path)
                 break
             except FileExistsError:
-                continue
+                # Progress independently of wall-clock resolution or concurrent saves.
+                timestamp += 1
         _sync_directory(directory)
     finally:
         temporary.unlink(missing_ok=True)
