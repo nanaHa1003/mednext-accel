@@ -162,9 +162,3 @@ rules:
     when: {family: depthwise_conv_transpose3d, direction: transpose, spatial_shape: [64, 64, 64], channels: [64, 64], batch: {min: 1}, kernel_size: [3, 3, 3]}
     use: {backward_weight: {implementation: triton_transpose_split_dw, parameters: auto}}
     confidence: inferred-same-sm
-  # Retain the stem's legacy checkpoint-independent SM120 scope. The shared
-  # stem policy additionally covers B1 with all-expansion checkpointing.
-  - id: stem-checkpoint-independent
-    when: {family: pointwise_conv3d, direction: regular, spatial_shape: [128, 128, 128], channels: [1, 32], batch: {min: 2}}
-    use: {training: {implementation: pointwise_gemm_per_sample}}
-    confidence: inferred-same-sm

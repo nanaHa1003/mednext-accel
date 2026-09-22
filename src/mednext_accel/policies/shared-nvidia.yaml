@@ -3,11 +3,12 @@
 # from work, while 128^3/16^3 regular dW remain excluded due counterexamples.
 # Only the stem is a shared pointwise winner (SM86 B12, SM89 B1/B10, SM120 B2/4/6).
 # Aggregate A6000 policy rejection does not invalidate its kernel evidence.
+# Operator timing applies independently of the model checkpointing policy.
 version: 2
 kind: mednext-accel-policy
 name: shared-nvidia
 target: {vendor: nvidia}
-scope: {dtype: bfloat16, checkpointing: all-expansion}
+scope: {dtype: bfloat16}
 evidence:
 - {id: rtx-a6000-b12, sha256: b94e423468b0ee5839fe09a62d6e160fb6739fbcb0c909ab53b10c3640464fae}
 - {id: l40s-b10, sha256: fffa74b383d74e2bcc01e1edc189c5d01249aea7d10c6dd7cd595b836b5d538e}

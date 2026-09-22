@@ -7,7 +7,7 @@ name: sm86
 target:
   vendor: nvidia
   sm: [8, 6]
-scope: {dtype: bfloat16, checkpointing: all-expansion}
+scope: {dtype: bfloat16}
 evidence:
 - {id: rtx-a6000-b12, sha256: b94e423468b0ee5839fe09a62d6e160fb6739fbcb0c909ab53b10c3640464fae}
 rules:

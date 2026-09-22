@@ -51,7 +51,8 @@ def op(channels=128, output=None, direction="regular", pointwise=False):
 
 @pytest.mark.parametrize("sm", [(8, 6), (8, 9), (12, 0), (9, 0)])
 @pytest.mark.parametrize("batch", [9, 13, 64])
-def test_inferred_regions_are_not_an_exact_batch_allowlist(sm, batch):
+@pytest.mark.parametrize("checkpointing", ["none", "whole-block", "all-expansion", "expansion:0,1"])
+def test_inferred_regions_are_not_an_exact_batch_allowlist(sm, batch, checkpointing):
     resolver = registry()
     cases = [
         (op(256, direction="downsample"), 16, "backward_input", "triton_downsample_dx"),
@@ -62,7 +63,10 @@ def test_inferred_regions_are_not_an_exact_batch_allowlist(sm, batch):
     ]
     for descriptor, size, phase, expected in cases:
         assert (
-            resolver.resolve(descriptor, context(batch, size, sm), phase).implementation == expected
+            resolver.resolve(
+                descriptor, context(batch, size, sm, checkpointing=checkpointing), phase
+            ).implementation
+            == expected
         )
 
 
@@ -104,8 +108,11 @@ def test_shared_threshold_boundaries(descriptor, size, phase, below, above):
         ((12, 0), 128, 32, 64, "triton_split_dw", "sm120"),
     ],
 )
-def test_regular_dw_counterexamples(sm, size, channels, batch, expected, source):
-    decision = registry().resolve(op(channels), context(batch, size, sm), "backward_weight")
+@pytest.mark.parametrize("checkpointing", ["none", "whole-block", "all-expansion", "expansion:0,1"])
+def test_regular_dw_counterexamples(sm, size, channels, batch, expected, source, checkpointing):
+    decision = registry().resolve(
+        op(channels), context(batch, size, sm, checkpointing=checkpointing), "backward_weight"
+    )
     assert (decision.implementation, decision.policy) == (expected, source)
 
 
@@ -262,3 +269,25 @@ def test_sm120_stem_preserves_supported_checkpoint_contexts(checkpointing):
         "training",
     )
     assert selected.implementation == "pointwise_gemm_per_sample"
+
+
+@pytest.mark.parametrize(
+    "style, stages", [(None, None), ("block", None), ("expansion", None), ("expansion", (0, 1))]
+)
+def test_factory_checkpoint_choice_preserves_operator_optimization(style, stages):
+    from mednext_accel import CheckpointConfig, mednext_small
+    from mednext_accel.ops.adaptive import AdaptiveDepthwise3d
+
+    checkpointing = None if style is None else CheckpointConfig(style=style, stages=stages)
+    model = mednext_small(in_channels=1, out_channels=3, checkpointing=checkpointing)
+    module = next(m for m in model.modules() if isinstance(m, AdaptiveDepthwise3d))
+    for sm in [(8, 6), (8, 9), (9, 0), (12, 0)]:
+        execution = context(9, 32, sm, checkpointing=module.model_context.checkpointing)
+        assert (
+            module.resolver.resolve(op(128), execution, "backward_input").implementation
+            == "triton_depthwise_dx"
+        )
+        assert (
+            module.resolver.resolve(op(128), execution, "backward_weight").implementation
+            == "triton_split_dw"
+        )

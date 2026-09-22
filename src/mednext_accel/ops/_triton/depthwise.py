@@ -24,20 +24,26 @@ def _partial_dw_kernel(
     SPLITS: tl.constexpr,
     BLOCK: tl.constexpr,
 ):
-    weight_index = tl.program_id(0)
-    split = tl.program_id(1)
-    kernel_plane = KERNEL_SIZE * KERNEL_SIZE
-    kernel_volume = kernel_plane * KERNEL_SIZE
+    # Promote before multiplying a program id, including masked reduction tails.
+    index_dtype: tl.constexpr = (
+        tl.int64
+        if max((N * D * H * W + SPLITS + BLOCK) * C, C * KERNEL_SIZE**3 * SPLITS) >= 2**31
+        else tl.int32
+    )
+    weight_index = tl.program_id(0).to(index_dtype)
+    split = tl.program_id(1).to(index_dtype)
+    kernel_plane: tl.constexpr = KERNEL_SIZE * KERNEL_SIZE
+    kernel_volume: tl.constexpr = kernel_plane * KERNEL_SIZE
     channel = weight_index // kernel_volume
     offset = weight_index % kernel_volume
     kd = offset // kernel_plane
     kh = (offset % kernel_plane) // KERNEL_SIZE
     kw = offset % KERNEL_SIZE
-    padding = KERNEL_SIZE // 2
+    padding: tl.constexpr = KERNEL_SIZE // 2
 
-    spatial = D * H * W
-    total = N * spatial
-    chunk = tl.cdiv(total, SPLITS)
+    spatial: tl.constexpr = D * H * W
+    total: tl.constexpr = N * spatial
+    chunk: tl.constexpr = triton.cdiv(total, SPLITS)
     split_start = split * chunk
     split_end = tl.minimum(split_start + chunk, total)
     positions = split_start + tl.arange(0, BLOCK)
@@ -65,8 +71,9 @@ def _partial_dw_kernel(
 
 @triton.jit
 def _finish_dw_kernel(partial, output, SPLITS: tl.constexpr, BLOCK: tl.constexpr):
-    weight_index = tl.program_id(0)
-    offsets = tl.arange(0, BLOCK)
+    # Grid extent is not a specialization parameter; keep the partial address wide.
+    weight_index = tl.program_id(0).to(tl.int64)
+    offsets = tl.arange(0, BLOCK).to(tl.int64)
     values = tl.load(partial + weight_index * SPLITS + offsets, mask=offsets < SPLITS, other=0.0)
     tl.store(output + weight_index, tl.sum(values, axis=0))
 
@@ -89,20 +96,31 @@ def _partial_transpose_dw_kernel(
     BLOCK: tl.constexpr,
     ACCUMULATE_FP64: tl.constexpr,
 ):
-    weight_index = tl.program_id(0)
-    split = tl.program_id(1)
-    kernel_plane = KERNEL_SIZE * KERNEL_SIZE
-    kernel_volume = kernel_plane * KERNEL_SIZE
+    # The transpose output can require 64-bit addresses while the input does not.
+    index_dtype: tl.constexpr = (
+        tl.int64
+        if max(
+            (N * D * H * W + SPLITS + BLOCK) * C,
+            N * C * OD * OH * OW,
+            C * KERNEL_SIZE**3 * SPLITS,
+        )
+        >= 2**31
+        else tl.int32
+    )
+    weight_index = tl.program_id(0).to(index_dtype)
+    split = tl.program_id(1).to(index_dtype)
+    kernel_plane: tl.constexpr = KERNEL_SIZE * KERNEL_SIZE
+    kernel_volume: tl.constexpr = kernel_plane * KERNEL_SIZE
     channel = weight_index // kernel_volume
     offset = weight_index % kernel_volume
     kd = offset // kernel_plane
     kh = (offset % kernel_plane) // KERNEL_SIZE
     kw = offset % KERNEL_SIZE
-    padding = KERNEL_SIZE // 2
+    padding: tl.constexpr = KERNEL_SIZE // 2
 
-    spatial = D * H * W
-    total = N * spatial
-    chunk = tl.cdiv(total, SPLITS)
+    spatial: tl.constexpr = D * H * W
+    total: tl.constexpr = N * spatial
+    chunk: tl.constexpr = triton.cdiv(total, SPLITS)
     split_start = split * chunk
     split_end = tl.minimum(split_start + chunk, total)
     positions = split_start + tl.arange(0, BLOCK)
@@ -142,9 +160,13 @@ def _depthwise_input_grad_kernel(
     BLOCK: tl.constexpr,
     ACCUMULATE_FP64: tl.constexpr,
 ):
-    offsets = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
-    spatial = D * H * W
-    total = N * C * spatial
+    # Keep ordinary launches on int32, widening before the first multiplication.
+    index_dtype: tl.constexpr = (
+        tl.int64 if max(N * C * D * H * W + BLOCK, C * KERNEL_SIZE**3) >= 2**31 else tl.int32
+    )
+    offsets = tl.program_id(0).to(index_dtype) * BLOCK + tl.arange(0, BLOCK)
+    spatial: tl.constexpr = D * H * W
+    total: tl.constexpr = N * C * spatial
     valid_output = offsets < total
     n = offsets // (C * spatial)
     rem = offsets % (C * spatial)
@@ -154,7 +176,7 @@ def _depthwise_input_grad_kernel(
     rem = rem % (H * W)
     ih = rem // W
     iw = rem % W
-    padding = KERNEL_SIZE // 2
+    padding: tl.constexpr = KERNEL_SIZE // 2
     accumulator = tl.zeros((BLOCK,), tl.float64 if ACCUMULATE_FP64 else tl.float32)
     for kd in range(KERNEL_SIZE):
         for kh in range(KERNEL_SIZE):
@@ -188,9 +210,14 @@ def _depthwise_stride2_input_grad_kernel(
     BLOCK: tl.constexpr,
     ACCUMULATE_FP64: tl.constexpr,
 ):
-    offsets = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
-    spatial = D * H * W
-    total = N * C * spatial
+    index_dtype: tl.constexpr = (
+        tl.int64
+        if max(N * C * D * H * W + BLOCK, N * C * OD * OH * OW, C * KERNEL_SIZE**3) >= 2**31
+        else tl.int32
+    )
+    offsets = tl.program_id(0).to(index_dtype) * BLOCK + tl.arange(0, BLOCK)
+    spatial: tl.constexpr = D * H * W
+    total: tl.constexpr = N * C * spatial
     valid_input = offsets < total
     n = offsets // (C * spatial)
     rem = offsets % (C * spatial)
@@ -200,7 +227,7 @@ def _depthwise_stride2_input_grad_kernel(
     rem = rem % (H * W)
     ih = rem // W
     iw = rem % W
-    padding = KERNEL_SIZE // 2
+    padding: tl.constexpr = KERNEL_SIZE // 2
     accumulator = tl.zeros((BLOCK,), tl.float64 if ACCUMULATE_FP64 else tl.float32)
     for kd in range(KERNEL_SIZE):
         for kh in range(KERNEL_SIZE):

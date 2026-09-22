@@ -96,7 +96,7 @@ def test_phase_routing_compiles_with_fp32_parameters(dx, dw):
     torch.manual_seed(31)
     reference = nn.Conv3d(2, 2, 3, padding=1, groups=2, device="cuda")
     candidate = wrapper(copy.deepcopy(reference), dx, dw)
-    compiled = torch.compile(candidate)
+    compiled = torch.compile(candidate, fullgraph=True)
     x = torch.randn(1, 2, 5, 5, 5, device="cuda", dtype=torch.bfloat16, requires_grad=True)
     y = x.detach().clone().requires_grad_()
     with torch.autocast("cuda", dtype=torch.bfloat16):
@@ -123,3 +123,39 @@ def test_tensor_guards_prevent_custom_execution(guard):
     with torch.set_grad_enabled(guard != "no-grad"), ObserveConvolution() as observed:
         candidate(x)
     assert "mednext_accel::depthwise_conv3d_odd_regular" not in observed.operations
+
+
+@pytest.mark.parametrize(
+    "style, stages", [(None, None), ("block", None), ("expansion", None), ("expansion", (0, 1))]
+)
+def test_factory_checkpoint_modes_execute_shared_optimized_gradients(style, stages):
+    from mednext_accel import CheckpointConfig, mednext_small
+    from mednext_accel.optimization.policies import load_bundled_policy
+
+    checkpointing = None if style is None else CheckpointConfig(style=style, stages=stages)
+    model = mednext_small(in_channels=1, out_channels=3, checkpointing=checkpointing)
+    candidate = next(
+        module
+        for module in model.modules()
+        if isinstance(module, AdaptiveDepthwise3d)
+        and module.in_channels == 128
+        and module.descriptor.direction == "regular"
+    ).cuda()
+    # Exercise shared policy execution on this GPU without its exact-SM overlay.
+    candidate.resolver = PolicyResolver((load_bundled_policy("shared-nvidia"),))
+    reference = nn.Conv3d(128, 128, 3, padding=1, groups=128, device="cuda")
+    reference.load_state_dict(candidate.state_dict())
+    x = torch.randn(1, 128, 32, 32, 32, device="cuda", requires_grad=True)
+    y = x.detach().clone().requires_grad_()
+    with torch.autocast("cuda", dtype=torch.bfloat16):
+        expected = reference(x)
+        with ObserveConvolution() as observed:
+            actual = candidate(y)
+    assert "mednext_accel::depthwise_conv3d_odd_regular" in observed.operations
+    gradient = torch.randn_like(expected)
+    wanted = torch.autograd.grad(expected, (x, *reference.parameters()), gradient)
+    with ObserveConvolution() as backward:
+        got = torch.autograd.grad(actual, (y, *candidate.parameters()), gradient)
+    assert backward.masks == [(False, False, True)]
+    for value, target in zip(got, wanted, strict=True):
+        assert (value.float() - target.float()).norm() / target.float().norm() < 0.02

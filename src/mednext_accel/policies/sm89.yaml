@@ -9,7 +9,7 @@ name: sm89
 target:
   vendor: nvidia
   sm: [8, 9]
-scope: {dtype: bfloat16, checkpointing: all-expansion}
+scope: {dtype: bfloat16}
 evidence:
 - {id: l40s-b10, sha256: fffa74b383d74e2bcc01e1edc189c5d01249aea7d10c6dd7cd595b836b5d538e}
 - {id: legacy-l40s-policy, sha256: a84d04d432e396cbc779b0a364387aa7ff964f8b0ab9d3dd61c8fa1f4799d668}
