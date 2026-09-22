@@ -18,6 +18,7 @@ from .evidence import (
     BatchSearchEvidence,
     ModelComparisonEvidence,
     ModelProbeEvidence,
+    model_probe_failure,
 )
 from .execution import (
     WorkloadBatchSelection,
@@ -35,7 +36,7 @@ from .synthesize import (
     synthesize_profile,
 )
 from .validation import validate_components
-from .whole_model import compare_model_results, effective_policy_identity, model_probe_failure
+from .whole_model import compare_model_results, effective_policy_identity
 
 
 def _checkpoint(value: str):

@@ -210,7 +210,11 @@ def test_full_evidence_roundtrip_preserves_failed_probes_and_model_rejection():
                 100,
                 (
                     BatchProbeEvidence(
-                        16, ModelProbeEvidence("oom", 0, message="OOM"), False, False
+                        16,
+                        ModelProbeEvidence("oom", 0, message="OOM"),
+                        False,
+                        False,
+                        "probe: status oom",
                     ),
                     BatchProbeEvidence(12, ModelProbeEvidence("ok", 0, 10.0, 90), True, True),
                 ),

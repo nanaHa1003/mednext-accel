@@ -8,7 +8,20 @@ from math import isfinite
 from typing import Literal
 
 from ..optimization.policy import OptimizationPolicy, parse_policy
-from .evidence import freeze, primitive
+from .evidence import (
+    OBJECTIVES,
+    freeze,
+    primitive,
+    record_fields,
+    require_bool,
+    require_int,
+    require_mapping,
+    require_number,
+    require_sequence,
+    require_string,
+    validate_json,
+    validate_workload,
+)
 from .matrix import KernelCase
 
 Objective = Literal["balanced", "throughput", "memory"]
@@ -47,6 +60,72 @@ class Measurement:
     rejection_reason: str | None = None
 
     def __post_init__(self) -> None:
+        require_bool(self.kernel_valid, "kernel_valid", nullable=True)
+        require_bool(self.objective_winner, "objective_winner", nullable=True)
+        for name in (
+            "family",
+            "direction",
+            "phase",
+            "implementation",
+            "dtype",
+            "checkpointing",
+            "probe_status",
+        ):
+            require_string(getattr(self, name), name)
+        for name in ("probe_message", "failure_stage", "validator", "rejection_reason"):
+            require_string(getattr(self, name), name, nullable=True)
+        for name in ("batch", "in_channels", "out_channels", "kernel_size"):
+            require_int(getattr(self, name), name, minimum=1)
+        if self.seed is not None:
+            require_int(self.seed, "seed", maximum=2**63 - 1)
+        require_sequence(self.spatial_shape, "spatial_shape")
+        if len(self.spatial_shape) != 3:
+            raise ValueError("spatial_shape must contain three dimensions")
+        for dimension in self.spatial_shape:
+            require_int(dimension, "spatial_shape dimension", minimum=1)
+        require_sequence(self.parameters, "parameters")
+        names = set()
+        for parameter in self.parameters:
+            require_sequence(parameter, "parameter")
+            if len(parameter) != 2:
+                raise ValueError("parameter must contain a name and value")
+            name, value = parameter
+            require_string(name, "parameter name")
+            require_int(value, "parameter value", minimum=1)
+            if name in names:
+                raise ValueError("duplicate parameter name")
+            names.add(name)
+        validate_workload(self.workload)
+        require_mapping(self.validation_metrics, "validation_metrics")
+        for name, metrics in self.validation_metrics.items():
+            record_fields(
+                metrics,
+                {"finite", "relative_l2", "max_absolute"},
+                f"validation_metrics.{name}",
+                required=set(),
+            )
+            if "finite" in metrics:
+                require_bool(metrics["finite"], f"validation_metrics.{name}.finite")
+            for metric in ("relative_l2", "max_absolute"):
+                if metric in metrics:
+                    require_number(metrics[metric], f"validation_metrics.{name}.{metric}")
+                    if metrics[metric] is not None and metrics[metric] < 0:
+                        raise ValueError(f"validation_metrics.{name}.{metric} must be nonnegative")
+            if self.kernel_valid is True:
+                relative = metrics.get("relative_l2")
+                if (
+                    metrics.get("finite") is not True
+                    or relative is None
+                    or not isfinite(relative)
+                    or relative >= 0.02
+                ):
+                    raise ValueError("kernel_valid contradicts validation_metrics")
+                if "max_absolute" in metrics and (
+                    metrics["max_absolute"] is None or not isfinite(metrics["max_absolute"])
+                ):
+                    raise ValueError("kernel_valid contradicts validation_metrics")
+        if self.kernel_valid is True and self.rejection_reason is not None:
+            raise ValueError("kernel_valid contradicts numerical rejection_reason")
         object.__setattr__(self, "spatial_shape", tuple(self.spatial_shape))
         object.__setattr__(self, "parameters", tuple(tuple(item) for item in self.parameters))
         object.__setattr__(self, "validation_metrics", freeze(self.validation_metrics))
@@ -57,7 +136,17 @@ class Measurement:
             "reference_peak_bytes",
             "candidate_peak_bytes",
         ):
+            require_number(getattr(self, name), name)
             object.__setattr__(self, name, freeze(getattr(self, name)))
+        validate_json(self.workload)
+        validate_json(self.validation_metrics)
+        if self.objective is None:
+            if self.objective_winner is not None:
+                raise ValueError("objective_winner requires an objective")
+        elif self.objective not in OBJECTIVES:
+            raise ValueError("unsupported objective")
+        elif self.objective_winner is not candidate_wins(self, self.objective):
+            raise ValueError("objective_winner contradicts the objective and kernel measurements")
 
     def to_primitive(self) -> dict[str, object]:
         return primitive(self)
@@ -72,6 +161,31 @@ def measurement_from_result(
     workload: Mapping[str, object] | None = None,
 ) -> Measurement:
     """Retain observed kernel facts, including partial results after a later failure."""
+    record_fields(
+        result,
+        {
+            "valid",
+            "status",
+            "message",
+            "reference_ms",
+            "candidate_ms",
+            "reference_peak_bytes",
+            "candidate_peak_bytes",
+            "seed",
+            "failure_stage",
+            "validator",
+            "validation_metrics",
+            "rejection_reason",
+            "case_id",
+            "implementation",
+            "parameters",
+            "checkpointing",
+        },
+        "kernel result",
+        required=set(),
+    )
+    if "valid" in result:
+        require_bool(result["valid"], "kernel result valid")
     key = case.key
     item = Measurement(
         family=key.family,
@@ -89,19 +203,18 @@ def measurement_from_result(
         reference_peak_bytes=result.get("reference_peak_bytes", 0),
         candidate_peak_bytes=result.get("candidate_peak_bytes", 0),
         parameters=key.parameters,
-        probe_status=str(result.get("status", "missing")),
+        probe_status=result.get("status", "missing"),
         probe_message=result.get("message"),
-        kernel_valid=bool(result["valid"]) if "valid" in result else None,
-        objective=objective,
+        kernel_valid=result.get("valid"),
         failure_stage=result.get("failure_stage"),
         seed=result.get("seed"),
         kernel_size=key.kernel_size,
-        workload=workload or {},
+        workload={} if workload is None else workload,
         validator=result.get("validator"),
-        validation_metrics=dict(result.get("validation_metrics", {})),
+        validation_metrics=result.get("validation_metrics", {}),
         rejection_reason=result.get("rejection_reason"),
     )
-    return replace(item, objective_winner=candidate_wins(item, objective))
+    return replace(item, objective=objective, objective_winner=candidate_wins(item, objective))
 
 
 def candidate_wins(item: Measurement, objective: Objective) -> bool:

@@ -26,6 +26,10 @@ class ProbeResult:
     peak_bytes: int
     reason: str | None = None
 
+    def __post_init__(self) -> None:
+        if type(self.feasible) is not bool:
+            raise ValueError("feasible must be a boolean")
+
 
 @dataclass(frozen=True, slots=True)
 class BatchSearchResult:
