@@ -33,7 +33,7 @@ def cuda_context(batch: int, spatial: int):
 
 
 def test_bundled_profiles_parse_and_have_family_defaults() -> None:
-    for name in ("generic-nvidia", "sm120"):
+    for name in ("generic-nvidia", "sm120", "sm89"):
         profile = load_bundled_profile(name)
         assert profile.name == name
         assert "pointwise_conv3d" in profile.defaults

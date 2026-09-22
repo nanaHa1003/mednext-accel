@@ -45,6 +45,8 @@ def test_distributions_exclude_local_review_scratch_and_cache_files(tmp_path: Pa
         wheel_names = archive.namelist()
     for names in (sdist_names, wheel_names):
         assert any(name.endswith("mednext_accel/__init__.py") for name in names)
+        for profile in ("generic-nvidia", "sm120", "sm89"):
+            assert any(name.endswith(f"mednext_accel/profiles/{profile}.json") for name in names)
         assert not any(
             part
             in {".superpowers", "final-fix-scratch", ".pytest_cache", ".ruff_cache", "__pycache__"}
@@ -77,7 +79,9 @@ def test_wheel_installs_and_runs_outside_source_tree(tmp_path: Path) -> None:
     program = """
 import torch
 import mednext_accel
+from mednext_accel.optimization.profiles import load_bundled_profile
 
+assert len(load_bundled_profile("sm89").rules) == 78
 model = mednext_accel.mednext_small(in_channels=1, out_channels=3).eval()
 with torch.no_grad():
     output = model(torch.randn(1, 1, 32, 32, 32))

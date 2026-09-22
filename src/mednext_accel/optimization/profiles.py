@@ -16,6 +16,8 @@ from .schema import OptimizationProfile, parse_profile
 
 ProfileSource = str | PathLike[str] | Mapping[str, object]
 
+_BUNDLED_PROFILES = {(8, 9): "sm89", (12, 0): "sm120"}
+
 
 def load_profile(
     source: ProfileSource, *, registry: ImplementationRegistry | None = None
@@ -70,7 +72,7 @@ class ProfileRegistry:
                     f"but the current device is SM {sm}; applying it as requested"
                 )
                 self._warn_once(f"external:{self.external.name}:{sm}", warning)
-        bundled_name = "sm120" if sm == (12, 0) else "generic-nvidia"
+        bundled_name = _BUNDLED_PROFILES.get(sm, "generic-nvidia")
         if bundled_name == "generic-nvidia" and sm is not None:
             warning = warning or (
                 f"no bundled profile for SM {sm}; using generic-nvidia defaults "

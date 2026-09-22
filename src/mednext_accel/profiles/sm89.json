@@ -1,0 +1,2537 @@
+{
+  "defaults": {
+    "depthwise_conv3d": {
+      "backward_bias": {
+        "implementation": "reference",
+        "parameters": {}
+      },
+      "backward_input": {
+        "implementation": "reference",
+        "parameters": {}
+      },
+      "backward_weight": {
+        "implementation": "reference",
+        "parameters": {}
+      },
+      "export": {
+        "implementation": "reference",
+        "parameters": {}
+      },
+      "inference": {
+        "implementation": "reference",
+        "parameters": {}
+      },
+      "training": {
+        "implementation": "reference",
+        "parameters": {}
+      }
+    },
+    "depthwise_conv_transpose3d": {
+      "backward_bias": {
+        "implementation": "reference",
+        "parameters": {}
+      },
+      "backward_input": {
+        "implementation": "reference",
+        "parameters": {}
+      },
+      "backward_weight": {
+        "implementation": "reference",
+        "parameters": {}
+      },
+      "export": {
+        "implementation": "reference",
+        "parameters": {}
+      },
+      "inference": {
+        "implementation": "reference",
+        "parameters": {}
+      },
+      "training": {
+        "implementation": "reference",
+        "parameters": {}
+      }
+    },
+    "gelu": {
+      "backward_bias": {
+        "implementation": "reference",
+        "parameters": {}
+      },
+      "backward_input": {
+        "implementation": "reference",
+        "parameters": {}
+      },
+      "backward_weight": {
+        "implementation": "reference",
+        "parameters": {}
+      },
+      "export": {
+        "implementation": "reference",
+        "parameters": {}
+      },
+      "inference": {
+        "implementation": "reference",
+        "parameters": {}
+      },
+      "training": {
+        "implementation": "reference",
+        "parameters": {}
+      }
+    },
+    "group_norm": {
+      "backward_bias": {
+        "implementation": "reference",
+        "parameters": {}
+      },
+      "backward_input": {
+        "implementation": "reference",
+        "parameters": {}
+      },
+      "backward_weight": {
+        "implementation": "reference",
+        "parameters": {}
+      },
+      "export": {
+        "implementation": "reference",
+        "parameters": {}
+      },
+      "inference": {
+        "implementation": "reference",
+        "parameters": {}
+      },
+      "training": {
+        "implementation": "reference",
+        "parameters": {}
+      }
+    },
+    "pointwise_conv3d": {
+      "backward_bias": {
+        "implementation": "reference",
+        "parameters": {}
+      },
+      "backward_input": {
+        "implementation": "reference",
+        "parameters": {}
+      },
+      "backward_weight": {
+        "implementation": "reference",
+        "parameters": {}
+      },
+      "export": {
+        "implementation": "reference",
+        "parameters": {}
+      },
+      "inference": {
+        "implementation": "reference",
+        "parameters": {}
+      },
+      "training": {
+        "implementation": "reference",
+        "parameters": {}
+      }
+    }
+  },
+  "measurements": [],
+  "overrides": [],
+  "profile": {
+    "name": "sm89",
+    "provenance": {
+      "compile_mode": "max-autotune-no-cudagraphs",
+      "coverage": {
+        "batch_search": "legacy-dense",
+        "batches": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          10
+        ],
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "phase": "training",
+        "workload": {
+          "family": "mednext_v1",
+          "identity_source": "user-confirmed",
+          "in_channels": 1,
+          "input_shape": [
+            1,
+            128,
+            128,
+            128
+          ],
+          "out_channels": 3,
+          "variant": "base"
+        }
+      },
+      "environment": {
+        "collected_at": "2026-09-22T05:31:58.102266Z",
+        "driver": "595.84",
+        "gpu": {
+          "name": "NVIDIA L40S",
+          "sm": [
+            8,
+            9
+          ],
+          "total_memory_bytes": 47667740672
+        },
+        "platform": "Linux-6.8.0-137-generic-x86_64-with-glibc2.39",
+        "python": "3.10.14",
+        "software": {
+          "cuda": "13.0",
+          "cudnn": 92400,
+          "mednext_accel": "0.1.0a0",
+          "torch": "2.14.0+cu130",
+          "triton": "3.8.0"
+        }
+      },
+      "execution": {
+        "deduplicated_reference_count": 0,
+        "kernel_case_count": 432,
+        "kernel_group_count": 45,
+        "whole_model_validation_count": 9
+      },
+      "generator": "mednext-accel",
+      "limitations": [
+        "Legacy pointwise validation used BF16 trainable parameters and elementwise allclose; rejected measurements were not relabeled. Only the existing valid pointwise rule is retained.",
+        "Unmatched shapes, batches, dtypes, phases, and checkpoint policies use reference defaults. Batch 9 was not measured."
+      ],
+      "objective": "balanced",
+      "rule_count": 78,
+      "source_measurement_count": 432,
+      "source_sha256": "c17c79e3a752ab9871cec8ccd2ec4a71767ca3381f28d26cea5e85c005d81279"
+    },
+    "target": {
+      "sm": [
+        8,
+        9
+      ],
+      "vendor": "nvidia"
+    }
+  },
+  "rules": [
+    {
+      "confidence": "interpolated",
+      "direction": "downsample",
+      "family": "depthwise_conv3d",
+      "id": "generated-0000",
+      "match": {
+        "batch": {
+          "max": 8,
+          "min": 1
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 256,
+        "out_channels": 256,
+        "spatial_shape": [
+          16,
+          16,
+          16
+        ]
+      },
+      "phases": {
+        "backward_input": {
+          "implementation": "triton_downsample_dx",
+          "parameters": {
+            "dx_block": 128
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "downsample",
+      "family": "depthwise_conv3d",
+      "id": "generated-0001",
+      "match": {
+        "batch": {
+          "max": 10,
+          "min": 10
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 256,
+        "out_channels": 256,
+        "spatial_shape": [
+          16,
+          16,
+          16
+        ]
+      },
+      "phases": {
+        "backward_input": {
+          "implementation": "triton_downsample_dx",
+          "parameters": {
+            "dx_block": 128
+          }
+        }
+      }
+    },
+    {
+      "confidence": "interpolated",
+      "direction": "downsample",
+      "family": "depthwise_conv3d",
+      "id": "generated-0002",
+      "match": {
+        "batch": {
+          "max": 8,
+          "min": 1
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 128,
+        "out_channels": 128,
+        "spatial_shape": [
+          32,
+          32,
+          32
+        ]
+      },
+      "phases": {
+        "backward_input": {
+          "implementation": "triton_downsample_dx",
+          "parameters": {
+            "dx_block": 128
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "downsample",
+      "family": "depthwise_conv3d",
+      "id": "generated-0003",
+      "match": {
+        "batch": {
+          "max": 10,
+          "min": 10
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 128,
+        "out_channels": 128,
+        "spatial_shape": [
+          32,
+          32,
+          32
+        ]
+      },
+      "phases": {
+        "backward_input": {
+          "implementation": "triton_downsample_dx",
+          "parameters": {
+            "dx_block": 128
+          }
+        }
+      }
+    },
+    {
+      "confidence": "interpolated",
+      "direction": "downsample",
+      "family": "depthwise_conv3d",
+      "id": "generated-0004",
+      "match": {
+        "batch": {
+          "max": 8,
+          "min": 1
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 64,
+        "out_channels": 64,
+        "spatial_shape": [
+          64,
+          64,
+          64
+        ]
+      },
+      "phases": {
+        "backward_input": {
+          "implementation": "triton_downsample_dx",
+          "parameters": {
+            "dx_block": 128
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "downsample",
+      "family": "depthwise_conv3d",
+      "id": "generated-0005",
+      "match": {
+        "batch": {
+          "max": 10,
+          "min": 10
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 64,
+        "out_channels": 64,
+        "spatial_shape": [
+          64,
+          64,
+          64
+        ]
+      },
+      "phases": {
+        "backward_input": {
+          "implementation": "triton_downsample_dx",
+          "parameters": {
+            "dx_block": 128
+          }
+        }
+      }
+    },
+    {
+      "confidence": "interpolated",
+      "direction": "downsample",
+      "family": "depthwise_conv3d",
+      "id": "generated-0006",
+      "match": {
+        "batch": {
+          "max": 8,
+          "min": 1
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 32,
+        "out_channels": 32,
+        "spatial_shape": [
+          128,
+          128,
+          128
+        ]
+      },
+      "phases": {
+        "backward_input": {
+          "implementation": "triton_downsample_dx",
+          "parameters": {
+            "dx_block": 128
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "downsample",
+      "family": "depthwise_conv3d",
+      "id": "generated-0007",
+      "match": {
+        "batch": {
+          "max": 10,
+          "min": 10
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 32,
+        "out_channels": 32,
+        "spatial_shape": [
+          128,
+          128,
+          128
+        ]
+      },
+      "phases": {
+        "backward_input": {
+          "implementation": "triton_downsample_dx",
+          "parameters": {
+            "dx_block": 128
+          }
+        }
+      }
+    },
+    {
+      "confidence": "interpolated",
+      "direction": "regular",
+      "family": "depthwise_conv3d",
+      "id": "generated-0008",
+      "match": {
+        "batch": {
+          "max": 8,
+          "min": 6
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 512,
+        "out_channels": 512,
+        "spatial_shape": [
+          8,
+          8,
+          8
+        ]
+      },
+      "phases": {
+        "backward_input": {
+          "implementation": "triton_depthwise_dx",
+          "parameters": {
+            "dx_block": 128
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "regular",
+      "family": "depthwise_conv3d",
+      "id": "generated-0009",
+      "match": {
+        "batch": {
+          "max": 10,
+          "min": 10
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 512,
+        "out_channels": 512,
+        "spatial_shape": [
+          8,
+          8,
+          8
+        ]
+      },
+      "phases": {
+        "backward_input": {
+          "implementation": "triton_depthwise_dx",
+          "parameters": {
+            "dx_block": 128
+          }
+        }
+      }
+    },
+    {
+      "confidence": "interpolated",
+      "direction": "regular",
+      "family": "depthwise_conv3d",
+      "id": "generated-0010",
+      "match": {
+        "batch": {
+          "max": 8,
+          "min": 2
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 256,
+        "out_channels": 256,
+        "spatial_shape": [
+          16,
+          16,
+          16
+        ]
+      },
+      "phases": {
+        "backward_input": {
+          "implementation": "triton_depthwise_dx",
+          "parameters": {
+            "dx_block": 128
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "regular",
+      "family": "depthwise_conv3d",
+      "id": "generated-0011",
+      "match": {
+        "batch": {
+          "max": 10,
+          "min": 10
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 256,
+        "out_channels": 256,
+        "spatial_shape": [
+          16,
+          16,
+          16
+        ]
+      },
+      "phases": {
+        "backward_input": {
+          "implementation": "triton_depthwise_dx",
+          "parameters": {
+            "dx_block": 128
+          }
+        }
+      }
+    },
+    {
+      "confidence": "interpolated",
+      "direction": "regular",
+      "family": "depthwise_conv3d",
+      "id": "generated-0012",
+      "match": {
+        "batch": {
+          "max": 8,
+          "min": 1
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 128,
+        "out_channels": 128,
+        "spatial_shape": [
+          32,
+          32,
+          32
+        ]
+      },
+      "phases": {
+        "backward_input": {
+          "implementation": "triton_depthwise_dx",
+          "parameters": {
+            "dx_block": 128
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "regular",
+      "family": "depthwise_conv3d",
+      "id": "generated-0013",
+      "match": {
+        "batch": {
+          "max": 10,
+          "min": 10
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 128,
+        "out_channels": 128,
+        "spatial_shape": [
+          32,
+          32,
+          32
+        ]
+      },
+      "phases": {
+        "backward_input": {
+          "implementation": "triton_depthwise_dx",
+          "parameters": {
+            "dx_block": 128
+          }
+        }
+      }
+    },
+    {
+      "confidence": "interpolated",
+      "direction": "regular",
+      "family": "depthwise_conv3d",
+      "id": "generated-0014",
+      "match": {
+        "batch": {
+          "max": 8,
+          "min": 1
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 64,
+        "out_channels": 64,
+        "spatial_shape": [
+          64,
+          64,
+          64
+        ]
+      },
+      "phases": {
+        "backward_input": {
+          "implementation": "triton_depthwise_dx",
+          "parameters": {
+            "dx_block": 128
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "regular",
+      "family": "depthwise_conv3d",
+      "id": "generated-0015",
+      "match": {
+        "batch": {
+          "max": 10,
+          "min": 10
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 64,
+        "out_channels": 64,
+        "spatial_shape": [
+          64,
+          64,
+          64
+        ]
+      },
+      "phases": {
+        "backward_input": {
+          "implementation": "triton_depthwise_dx",
+          "parameters": {
+            "dx_block": 128
+          }
+        }
+      }
+    },
+    {
+      "confidence": "interpolated",
+      "direction": "regular",
+      "family": "depthwise_conv3d",
+      "id": "generated-0016",
+      "match": {
+        "batch": {
+          "max": 8,
+          "min": 1
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 32,
+        "out_channels": 32,
+        "spatial_shape": [
+          128,
+          128,
+          128
+        ]
+      },
+      "phases": {
+        "backward_input": {
+          "implementation": "triton_depthwise_dx",
+          "parameters": {
+            "dx_block": 128
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "regular",
+      "family": "depthwise_conv3d",
+      "id": "generated-0017",
+      "match": {
+        "batch": {
+          "max": 10,
+          "min": 10
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 32,
+        "out_channels": 32,
+        "spatial_shape": [
+          128,
+          128,
+          128
+        ]
+      },
+      "phases": {
+        "backward_input": {
+          "implementation": "triton_depthwise_dx",
+          "parameters": {
+            "dx_block": 128
+          }
+        }
+      }
+    },
+    {
+      "confidence": "interpolated",
+      "direction": "regular",
+      "family": "depthwise_conv3d",
+      "id": "generated-0018",
+      "match": {
+        "batch": {
+          "max": 8,
+          "min": 2
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 512,
+        "out_channels": 512,
+        "spatial_shape": [
+          8,
+          8,
+          8
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 1
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "regular",
+      "family": "depthwise_conv3d",
+      "id": "generated-0019",
+      "match": {
+        "batch": {
+          "max": 10,
+          "min": 10
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 512,
+        "out_channels": 512,
+        "spatial_shape": [
+          8,
+          8,
+          8
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 1
+          }
+        }
+      }
+    },
+    {
+      "confidence": "interpolated",
+      "direction": "regular",
+      "family": "depthwise_conv3d",
+      "id": "generated-0020",
+      "match": {
+        "batch": {
+          "max": 8,
+          "min": 1
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 256,
+        "out_channels": 256,
+        "spatial_shape": [
+          16,
+          16,
+          16
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 1
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "regular",
+      "family": "depthwise_conv3d",
+      "id": "generated-0021",
+      "match": {
+        "batch": {
+          "max": 1,
+          "min": 1
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 128,
+        "out_channels": 128,
+        "spatial_shape": [
+          32,
+          32,
+          32
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 1
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "regular",
+      "family": "depthwise_conv3d",
+      "id": "generated-0022",
+      "match": {
+        "batch": {
+          "max": 2,
+          "min": 2
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 128,
+        "out_channels": 128,
+        "spatial_shape": [
+          32,
+          32,
+          32
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 2
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "regular",
+      "family": "depthwise_conv3d",
+      "id": "generated-0023",
+      "match": {
+        "batch": {
+          "max": 3,
+          "min": 3
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 128,
+        "out_channels": 128,
+        "spatial_shape": [
+          32,
+          32,
+          32
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 3
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "regular",
+      "family": "depthwise_conv3d",
+      "id": "generated-0024",
+      "match": {
+        "batch": {
+          "max": 4,
+          "min": 4
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 128,
+        "out_channels": 128,
+        "spatial_shape": [
+          32,
+          32,
+          32
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 4
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "regular",
+      "family": "depthwise_conv3d",
+      "id": "generated-0025",
+      "match": {
+        "batch": {
+          "max": 5,
+          "min": 5
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 128,
+        "out_channels": 128,
+        "spatial_shape": [
+          32,
+          32,
+          32
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 5
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "regular",
+      "family": "depthwise_conv3d",
+      "id": "generated-0026",
+      "match": {
+        "batch": {
+          "max": 6,
+          "min": 6
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 128,
+        "out_channels": 128,
+        "spatial_shape": [
+          32,
+          32,
+          32
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 6
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "regular",
+      "family": "depthwise_conv3d",
+      "id": "generated-0027",
+      "match": {
+        "batch": {
+          "max": 7,
+          "min": 7
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 128,
+        "out_channels": 128,
+        "spatial_shape": [
+          32,
+          32,
+          32
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 7
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "regular",
+      "family": "depthwise_conv3d",
+      "id": "generated-0028",
+      "match": {
+        "batch": {
+          "max": 8,
+          "min": 8
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 128,
+        "out_channels": 128,
+        "spatial_shape": [
+          32,
+          32,
+          32
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 8
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "regular",
+      "family": "depthwise_conv3d",
+      "id": "generated-0029",
+      "match": {
+        "batch": {
+          "max": 10,
+          "min": 10
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 128,
+        "out_channels": 128,
+        "spatial_shape": [
+          32,
+          32,
+          32
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 10
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "regular",
+      "family": "depthwise_conv3d",
+      "id": "generated-0030",
+      "match": {
+        "batch": {
+          "max": 1,
+          "min": 1
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 64,
+        "out_channels": 64,
+        "spatial_shape": [
+          64,
+          64,
+          64
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 8
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "regular",
+      "family": "depthwise_conv3d",
+      "id": "generated-0031",
+      "match": {
+        "batch": {
+          "max": 2,
+          "min": 2
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 64,
+        "out_channels": 64,
+        "spatial_shape": [
+          64,
+          64,
+          64
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 16
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "regular",
+      "family": "depthwise_conv3d",
+      "id": "generated-0032",
+      "match": {
+        "batch": {
+          "max": 3,
+          "min": 3
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 64,
+        "out_channels": 64,
+        "spatial_shape": [
+          64,
+          64,
+          64
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 24
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "regular",
+      "family": "depthwise_conv3d",
+      "id": "generated-0033",
+      "match": {
+        "batch": {
+          "max": 4,
+          "min": 4
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 64,
+        "out_channels": 64,
+        "spatial_shape": [
+          64,
+          64,
+          64
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 32
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "regular",
+      "family": "depthwise_conv3d",
+      "id": "generated-0034",
+      "match": {
+        "batch": {
+          "max": 5,
+          "min": 5
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 64,
+        "out_channels": 64,
+        "spatial_shape": [
+          64,
+          64,
+          64
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 40
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "regular",
+      "family": "depthwise_conv3d",
+      "id": "generated-0035",
+      "match": {
+        "batch": {
+          "max": 6,
+          "min": 6
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 64,
+        "out_channels": 64,
+        "spatial_shape": [
+          64,
+          64,
+          64
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 48
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "regular",
+      "family": "depthwise_conv3d",
+      "id": "generated-0036",
+      "match": {
+        "batch": {
+          "max": 7,
+          "min": 7
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 64,
+        "out_channels": 64,
+        "spatial_shape": [
+          64,
+          64,
+          64
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 56
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "regular",
+      "family": "depthwise_conv3d",
+      "id": "generated-0037",
+      "match": {
+        "batch": {
+          "max": 8,
+          "min": 8
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 64,
+        "out_channels": 64,
+        "spatial_shape": [
+          64,
+          64,
+          64
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 64
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "regular",
+      "family": "depthwise_conv3d",
+      "id": "generated-0038",
+      "match": {
+        "batch": {
+          "max": 10,
+          "min": 10
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 64,
+        "out_channels": 64,
+        "spatial_shape": [
+          64,
+          64,
+          64
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 80
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "regular",
+      "family": "depthwise_conv3d",
+      "id": "generated-0039",
+      "match": {
+        "batch": {
+          "max": 1,
+          "min": 1
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 32,
+        "out_channels": 32,
+        "spatial_shape": [
+          128,
+          128,
+          128
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 64
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "regular",
+      "family": "depthwise_conv3d",
+      "id": "generated-0040",
+      "match": {
+        "batch": {
+          "max": 2,
+          "min": 2
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 32,
+        "out_channels": 32,
+        "spatial_shape": [
+          128,
+          128,
+          128
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 128
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "regular",
+      "family": "depthwise_conv3d",
+      "id": "generated-0041",
+      "match": {
+        "batch": {
+          "max": 3,
+          "min": 3
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 32,
+        "out_channels": 32,
+        "spatial_shape": [
+          128,
+          128,
+          128
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 192
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "regular",
+      "family": "depthwise_conv3d",
+      "id": "generated-0042",
+      "match": {
+        "batch": {
+          "max": 4,
+          "min": 4
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 32,
+        "out_channels": 32,
+        "spatial_shape": [
+          128,
+          128,
+          128
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 256
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "regular",
+      "family": "depthwise_conv3d",
+      "id": "generated-0043",
+      "match": {
+        "batch": {
+          "max": 5,
+          "min": 5
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 32,
+        "out_channels": 32,
+        "spatial_shape": [
+          128,
+          128,
+          128
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 320
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "regular",
+      "family": "depthwise_conv3d",
+      "id": "generated-0044",
+      "match": {
+        "batch": {
+          "max": 6,
+          "min": 6
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 32,
+        "out_channels": 32,
+        "spatial_shape": [
+          128,
+          128,
+          128
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 384
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "regular",
+      "family": "depthwise_conv3d",
+      "id": "generated-0045",
+      "match": {
+        "batch": {
+          "max": 7,
+          "min": 7
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 32,
+        "out_channels": 32,
+        "spatial_shape": [
+          128,
+          128,
+          128
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 448
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "regular",
+      "family": "depthwise_conv3d",
+      "id": "generated-0046",
+      "match": {
+        "batch": {
+          "max": 8,
+          "min": 8
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 32,
+        "out_channels": 32,
+        "spatial_shape": [
+          128,
+          128,
+          128
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 512
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "regular",
+      "family": "depthwise_conv3d",
+      "id": "generated-0047",
+      "match": {
+        "batch": {
+          "max": 10,
+          "min": 10
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 32,
+        "out_channels": 32,
+        "spatial_shape": [
+          128,
+          128,
+          128
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 512
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "transpose",
+      "family": "depthwise_conv_transpose3d",
+      "id": "generated-0048",
+      "match": {
+        "batch": {
+          "max": 8,
+          "min": 8
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 512,
+        "out_channels": 512,
+        "spatial_shape": [
+          8,
+          8,
+          8
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_transpose_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 1
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "transpose",
+      "family": "depthwise_conv_transpose3d",
+      "id": "generated-0049",
+      "match": {
+        "batch": {
+          "max": 10,
+          "min": 10
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 512,
+        "out_channels": 512,
+        "spatial_shape": [
+          8,
+          8,
+          8
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_transpose_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 1
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "transpose",
+      "family": "depthwise_conv_transpose3d",
+      "id": "generated-0050",
+      "match": {
+        "batch": {
+          "max": 1,
+          "min": 1
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 256,
+        "out_channels": 256,
+        "spatial_shape": [
+          16,
+          16,
+          16
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_transpose_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 1
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "transpose",
+      "family": "depthwise_conv_transpose3d",
+      "id": "generated-0051",
+      "match": {
+        "batch": {
+          "max": 2,
+          "min": 2
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 256,
+        "out_channels": 256,
+        "spatial_shape": [
+          16,
+          16,
+          16
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_transpose_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 2
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "transpose",
+      "family": "depthwise_conv_transpose3d",
+      "id": "generated-0052",
+      "match": {
+        "batch": {
+          "max": 3,
+          "min": 3
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 256,
+        "out_channels": 256,
+        "spatial_shape": [
+          16,
+          16,
+          16
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_transpose_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 3
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "transpose",
+      "family": "depthwise_conv_transpose3d",
+      "id": "generated-0053",
+      "match": {
+        "batch": {
+          "max": 4,
+          "min": 4
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 256,
+        "out_channels": 256,
+        "spatial_shape": [
+          16,
+          16,
+          16
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_transpose_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 4
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "transpose",
+      "family": "depthwise_conv_transpose3d",
+      "id": "generated-0054",
+      "match": {
+        "batch": {
+          "max": 5,
+          "min": 5
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 256,
+        "out_channels": 256,
+        "spatial_shape": [
+          16,
+          16,
+          16
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_transpose_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 5
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "transpose",
+      "family": "depthwise_conv_transpose3d",
+      "id": "generated-0055",
+      "match": {
+        "batch": {
+          "max": 6,
+          "min": 6
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 256,
+        "out_channels": 256,
+        "spatial_shape": [
+          16,
+          16,
+          16
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_transpose_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 6
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "transpose",
+      "family": "depthwise_conv_transpose3d",
+      "id": "generated-0056",
+      "match": {
+        "batch": {
+          "max": 7,
+          "min": 7
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 256,
+        "out_channels": 256,
+        "spatial_shape": [
+          16,
+          16,
+          16
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_transpose_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 7
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "transpose",
+      "family": "depthwise_conv_transpose3d",
+      "id": "generated-0057",
+      "match": {
+        "batch": {
+          "max": 8,
+          "min": 8
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 256,
+        "out_channels": 256,
+        "spatial_shape": [
+          16,
+          16,
+          16
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_transpose_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 8
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "transpose",
+      "family": "depthwise_conv_transpose3d",
+      "id": "generated-0058",
+      "match": {
+        "batch": {
+          "max": 10,
+          "min": 10
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 256,
+        "out_channels": 256,
+        "spatial_shape": [
+          16,
+          16,
+          16
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_transpose_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 10
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "transpose",
+      "family": "depthwise_conv_transpose3d",
+      "id": "generated-0059",
+      "match": {
+        "batch": {
+          "max": 1,
+          "min": 1
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 128,
+        "out_channels": 128,
+        "spatial_shape": [
+          32,
+          32,
+          32
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_transpose_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 8
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "transpose",
+      "family": "depthwise_conv_transpose3d",
+      "id": "generated-0060",
+      "match": {
+        "batch": {
+          "max": 2,
+          "min": 2
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 128,
+        "out_channels": 128,
+        "spatial_shape": [
+          32,
+          32,
+          32
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_transpose_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 16
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "transpose",
+      "family": "depthwise_conv_transpose3d",
+      "id": "generated-0061",
+      "match": {
+        "batch": {
+          "max": 3,
+          "min": 3
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 128,
+        "out_channels": 128,
+        "spatial_shape": [
+          32,
+          32,
+          32
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_transpose_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 24
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "transpose",
+      "family": "depthwise_conv_transpose3d",
+      "id": "generated-0062",
+      "match": {
+        "batch": {
+          "max": 4,
+          "min": 4
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 128,
+        "out_channels": 128,
+        "spatial_shape": [
+          32,
+          32,
+          32
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_transpose_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 32
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "transpose",
+      "family": "depthwise_conv_transpose3d",
+      "id": "generated-0063",
+      "match": {
+        "batch": {
+          "max": 5,
+          "min": 5
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 128,
+        "out_channels": 128,
+        "spatial_shape": [
+          32,
+          32,
+          32
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_transpose_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 40
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "transpose",
+      "family": "depthwise_conv_transpose3d",
+      "id": "generated-0064",
+      "match": {
+        "batch": {
+          "max": 6,
+          "min": 6
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 128,
+        "out_channels": 128,
+        "spatial_shape": [
+          32,
+          32,
+          32
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_transpose_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 48
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "transpose",
+      "family": "depthwise_conv_transpose3d",
+      "id": "generated-0065",
+      "match": {
+        "batch": {
+          "max": 7,
+          "min": 7
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 128,
+        "out_channels": 128,
+        "spatial_shape": [
+          32,
+          32,
+          32
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_transpose_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 56
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "transpose",
+      "family": "depthwise_conv_transpose3d",
+      "id": "generated-0066",
+      "match": {
+        "batch": {
+          "max": 8,
+          "min": 8
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 128,
+        "out_channels": 128,
+        "spatial_shape": [
+          32,
+          32,
+          32
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_transpose_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 64
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "transpose",
+      "family": "depthwise_conv_transpose3d",
+      "id": "generated-0067",
+      "match": {
+        "batch": {
+          "max": 10,
+          "min": 10
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 128,
+        "out_channels": 128,
+        "spatial_shape": [
+          32,
+          32,
+          32
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_transpose_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 80
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "transpose",
+      "family": "depthwise_conv_transpose3d",
+      "id": "generated-0068",
+      "match": {
+        "batch": {
+          "max": 1,
+          "min": 1
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 64,
+        "out_channels": 64,
+        "spatial_shape": [
+          64,
+          64,
+          64
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_transpose_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 64
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "transpose",
+      "family": "depthwise_conv_transpose3d",
+      "id": "generated-0069",
+      "match": {
+        "batch": {
+          "max": 2,
+          "min": 2
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 64,
+        "out_channels": 64,
+        "spatial_shape": [
+          64,
+          64,
+          64
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_transpose_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 128
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "transpose",
+      "family": "depthwise_conv_transpose3d",
+      "id": "generated-0070",
+      "match": {
+        "batch": {
+          "max": 3,
+          "min": 3
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 64,
+        "out_channels": 64,
+        "spatial_shape": [
+          64,
+          64,
+          64
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_transpose_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 192
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "transpose",
+      "family": "depthwise_conv_transpose3d",
+      "id": "generated-0071",
+      "match": {
+        "batch": {
+          "max": 4,
+          "min": 4
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 64,
+        "out_channels": 64,
+        "spatial_shape": [
+          64,
+          64,
+          64
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_transpose_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 256
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "transpose",
+      "family": "depthwise_conv_transpose3d",
+      "id": "generated-0072",
+      "match": {
+        "batch": {
+          "max": 5,
+          "min": 5
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 64,
+        "out_channels": 64,
+        "spatial_shape": [
+          64,
+          64,
+          64
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_transpose_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 320
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "transpose",
+      "family": "depthwise_conv_transpose3d",
+      "id": "generated-0073",
+      "match": {
+        "batch": {
+          "max": 6,
+          "min": 6
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 64,
+        "out_channels": 64,
+        "spatial_shape": [
+          64,
+          64,
+          64
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_transpose_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 384
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "transpose",
+      "family": "depthwise_conv_transpose3d",
+      "id": "generated-0074",
+      "match": {
+        "batch": {
+          "max": 7,
+          "min": 7
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 64,
+        "out_channels": 64,
+        "spatial_shape": [
+          64,
+          64,
+          64
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_transpose_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 448
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "transpose",
+      "family": "depthwise_conv_transpose3d",
+      "id": "generated-0075",
+      "match": {
+        "batch": {
+          "max": 8,
+          "min": 8
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 64,
+        "out_channels": 64,
+        "spatial_shape": [
+          64,
+          64,
+          64
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_transpose_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 512
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "transpose",
+      "family": "depthwise_conv_transpose3d",
+      "id": "generated-0076",
+      "match": {
+        "batch": {
+          "max": 10,
+          "min": 10
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 64,
+        "out_channels": 64,
+        "spatial_shape": [
+          64,
+          64,
+          64
+        ]
+      },
+      "phases": {
+        "backward_weight": {
+          "implementation": "triton_transpose_split_dw",
+          "parameters": {
+            "dw_block": 512,
+            "dw_splits": 512
+          }
+        }
+      }
+    },
+    {
+      "confidence": "measured",
+      "direction": "regular",
+      "family": "pointwise_conv3d",
+      "id": "generated-0077",
+      "match": {
+        "batch": {
+          "max": 1,
+          "min": 1
+        },
+        "checkpointing": "all-expansion",
+        "dtype": "bfloat16",
+        "in_channels": 1,
+        "out_channels": 32,
+        "spatial_shape": [
+          128,
+          128,
+          128
+        ]
+      },
+      "phases": {
+        "training": {
+          "implementation": "pointwise_gemm_per_sample",
+          "parameters": {}
+        }
+      }
+    }
+  ],
+  "schema_version": 1
+}
