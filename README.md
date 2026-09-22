@@ -198,10 +198,15 @@ Generate one local profile with no workload flags:
 mednext-accel profile
 ```
 
-The profiler detects the GPU and VRAM, expands small batches densely, searches
-for the largest feasible batch with isolated subprocesses, validates candidate
-forward/backward results, and writes one merged profile. After batch search, a
-representative two-phase display looks like this (the counts are illustrative):
+The profiler detects the GPU and VRAM, searches for the largest feasible batch
+with isolated subprocesses, profiles kernels only at that selected batch,
+validates candidate forward/backward results, and writes one merged profile. A
+supplied `batch_search.maximum` is tried first and completes the search in one
+model probe when feasible. Without an upper bound, the profiler uses
+exponential growth followed by binary refinement. Rerun with another
+`maximum` when you want measured evidence for another batch. After batch search,
+a representative two-phase display looks like this (the counts are
+illustrative):
 
 ```text
 kernel plan: 20 planned groups, 192 unique experiments, 576 requested references
@@ -214,16 +219,18 @@ An experiment is one unique kernel case. Requested references include repeated
 uses of that case across model and checkpoint contexts, so the kernel is timed
 once and its result is reused. Groups are child-process attempts; a failed group
 is bisected for isolation, which can increase the displayed total and the final
-group count. Whole-model checks remain specific to each context and run only at
-the boundaries of consecutive batches with the same decisions. Batch search is
-also context-specific because checkpointing and model shape affect memory, so
-its probes are not globally deduplicated.
+group count. Whole-model checks remain specific to each context and run once at
+its selected batch. Batch search is also context-specific because checkpointing
+and model shape affect memory, so its diagnostic probes are not globally
+deduplicated or promoted into kernel measurements.
 
 The profiler reports elapsed time and ETA for each fixed-size phase. Hardware,
 driver, Python, PyTorch, CUDA, cuDNN, and Triton versions, along with the final
-execution counts, are embedded in the generated profile. A small YAML campaign
-can restrict variants or input shapes. Model construction and first forward
-never run these benchmarks.
+execution counts and the complete normalized campaign, are embedded in the
+generated profile. Campaign provenance retains every workload's model family,
+variant, shape, dtype, phase, checkpoint policy, and channel counts. A small
+YAML campaign can restrict variants or input shapes. Model construction and
+first forward never run these benchmarks.
 
 Use `fullgraph=True` when the complete training graph is supported. On RTX 5090,
 `mode="default"` is a good general choice, while

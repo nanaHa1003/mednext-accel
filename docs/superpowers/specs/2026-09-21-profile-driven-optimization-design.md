@@ -200,7 +200,8 @@ parsing to the same primitive mapping. A profile contains:
 - schema version and profile identity;
 - target vendor and optional SM architecture;
 - provenance including GPU, VRAM, PyTorch, CUDA, cuDNN, Triton, package commit,
-  command, and timestamps;
+  command, timestamps, and the complete normalized campaign with every workload
+  identity;
 - implementation versions;
 - operator-family defaults;
 - ordered interval and formula rules;
@@ -399,28 +400,29 @@ merge experiment files manually.
 
 ## Adaptive batch search
 
-`batch_sizes: auto` derives its range from the current GPU VRAM separately for
-each model, spatial shape, phase, dtype, and checkpoint context.
+The final behavior is specified by
+[Maximum-Only Batch Search](2026-09-22-maximum-batch-search-design.md), which
+supersedes this design's earlier dense-sampling proposal. Search locates one
+maximum feasible batch separately for each model, spatial shape, phase, dtype,
+and checkpoint context.
 
-1. Measure batch 1 peak memory.
-2. Use batch 1 and batch 2 to estimate activation-memory slope.
-3. Probe powers of two until projected or observed memory reaches the campaign
-   limit.
-4. Use binary refinement to find the maximum feasible integer batch.
-5. Run every batch from 1 through `dense_until`, which defaults to 8.
-6. Above the dense range, sample powers, midpoints, the maximum feasible batch,
-   and neighbors around implementation or latency-slope changes.
-7. Execute every workload probe in an isolated subprocess so OOM cannot corrupt
-   later measurements.
+When `maximum` is supplied, the profiler probes it first. A feasible maximum
+finishes the search after that single model probe. If it is infeasible, batch
+one establishes the lower boundary and binary search finds the largest batch
+that fits. When `maximum` is omitted, powers of two establish an infeasible
+upper boundary before binary refinement. Every probe runs in an isolated
+subprocess so an OOM cannot corrupt later measurements.
+
+Search probes are diagnostic evidence only. Kernel profiling and whole-model
+validation run only at the selected maximum. To collect measured evidence for
+another batch, the user reruns the campaign with that batch as `maximum`.
 
 The default usable-memory fraction is 0.90. It is configurable in a campaign:
 
 ```yaml
-batch_sizes:
-  strategy: auto
+batch_search:
   memory_fraction: 0.90
-  dense_until: 8
-  maximum: null
+  maximum: 16  # optional upper bound
 ```
 
 The maximum validated batch is provenance, not a runtime limit. A 32 GiB

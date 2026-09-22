@@ -46,9 +46,10 @@ mednext-accel profile
 
 It detects GPU architecture and VRAM, profiles installed MedNeXt v1 variants,
 and writes one profile to `~/.cache/mednext_accel/profiles/`. CUDA work runs in
-child processes, so an OOM does not poison the campaign. Batch search tests
-every integer through eight when feasible, expands by powers of two, then uses
-binary refinement at the memory boundary.
+child processes, so an OOM does not poison the campaign. Batch search locates
+one maximum feasible batch for each workload. A supplied `maximum` is tested
+first and needs only one model probe when it fits; without one, exponential
+growth finds an infeasible upper bound and binary search refines the boundary.
 
 Interactive terminals show a Rich progress display. Redirected output and
 `tee` automatically use stable plain-text lines. Override the selection with
@@ -58,8 +59,10 @@ variant, spatial shape, channels, checkpoint context, and compile mode because
 those inputs affect whole-model memory and step time; its probes are therefore
 not globally deduplicated.
 
-Once feasible batches are known, the fixed-size kernel and validation phases
-show completed/total work and ETA. A compact representative display is:
+Once the maximum feasible batch is selected, the fixed-size kernel and
+validation phases show completed/total work and ETA. Diagnostic model probes
+used to locate the boundary are not kernel experiments. A compact
+representative display is:
 
 ```text
 kernel plan: 20 planned groups, 192 unique experiments, 576 requested references
@@ -78,18 +81,21 @@ bisects its cases and retries both halves, so the group total and final count ca
 grow beyond the original plan.
 
 Shared kernel results are projected back into each workload before synthesis.
-Consecutive batches with the same complete operator decisions form a segment;
-whole-model validation probes only the first and last batch of each segment.
+Only the selected maximum is kernel-profiled and forms a measured claim in the
+generated profile. Whole-model validation runs once for that selected batch.
 Those checks remain context-specific, so a result from one model or checkpoint
-configuration is never used to validate another.
+configuration is never used to validate another. Rerun the campaign with a
+different `maximum` to collect evidence for another batch.
 
 The generated profile records the GPU name, SM, VRAM, NVIDIA driver, platform,
 Python, mednext-accel, PyTorch, CUDA, cuDNN, Triton, objective, and compile mode
 under `profile.provenance`. Its `execution` object records unique kernel cases,
 actual child attempts (including bisection retries), actual whole-model endpoint
-probes, and the requested references removed by kernel deduplication. It omits
-hostnames and usernames. Profiles without `execution` remain valid schema-v1
-documents.
+probes, and the requested references removed by kernel deduplication. Its
+`campaign` object preserves the complete normalized campaign, including batch
+search settings and every workload's model family, variant, shape, dtype,
+phase, checkpoint policy, and channel counts. It omits hostnames and usernames.
+Profiles without `execution` or `campaign` remain valid schema-v1 documents.
 
 A minimal campaign can narrow the workload:
 
@@ -100,8 +106,8 @@ workloads:
     spatial: [128, 128, 128]
     checkpointing: auto
 batch_search:
-  strategy: auto
   memory_fraction: 0.90
+  maximum: 16  # optional upper bound
 ```
 
 ```bash
@@ -111,9 +117,8 @@ mednext-accel profile workload.yaml
 `checkpointing: auto` measures no checkpointing, all expansion branches, and
 whole blocks. It does not select checkpointing for application code; the user
 still chooses checkpoint style and batch size. The profiler validates numerical
-results, records latency and peak allocation, merges adjacent batches with the
-same winner, and retains measured launch parameters. Generated output is a
-normal factory input.
+results, records latency and peak allocation at the selected maximum, and
+retains measured launch parameters. Generated output is a normal factory input.
 
 ## torch.compile
 
