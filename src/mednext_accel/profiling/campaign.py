@@ -67,10 +67,11 @@ def load_campaign(source: CampaignSource | None) -> Campaign:
     if preset not in ("mednext-v1", "all"):
         raise ValueError(f"preset {preset!r} is unavailable; installed model families: mednext-v1")
     raw_search = _mapping(data.get("batch_search", {}), "batch_search")
+    unknown_search_fields = sorted(set(raw_search) - {"memory_fraction", "maximum"})
+    if unknown_search_fields:
+        raise ValueError(f"unknown batch_search field(s): {', '.join(unknown_search_fields)}")
     batch_search = BatchSearch(
-        strategy=str(raw_search.get("strategy", "auto")),  # type: ignore[arg-type]
         memory_fraction=float(raw_search.get("memory_fraction", 0.90)),
-        dense_until=int(raw_search.get("dense_until", 8)),
         maximum=(None if raw_search.get("maximum") is None else int(raw_search["maximum"])),
     )
     raw_workloads = data.get("workloads")

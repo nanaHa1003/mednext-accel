@@ -173,6 +173,15 @@ def test_public_run_campaign_remains_tuple_compatible(monkeypatch) -> None:
     assert isinstance(measurements, tuple)
 
 
+def test_api_rejects_obsolete_batch_search_before_environment(monkeypatch) -> None:
+    def fail_side_effect(*args, **kwargs):
+        pytest.fail("profiling side effect before campaign validation")
+
+    monkeypatch.setattr(api, "collect_environment", fail_side_effect)
+    with pytest.raises(ValueError, match=r"unknown batch_search field.*dense_until"):
+        api.profile({"batch_search": {"dense_until": 8}})
+
+
 @pytest.mark.parametrize("entrypoint", ["api", "cli"])
 @pytest.mark.parametrize("dtypes", [["float32"], ["bfloat16", "float32"]])
 def test_public_profile_rejects_dtypes_before_any_profiling_side_effect(

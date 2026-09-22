@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from mednext_accel.profiling import cli
+from mednext_accel.profiling import api, cli
 
 ROOT = Path(__file__).parents[2]
 
@@ -79,3 +79,15 @@ def test_zero_argument_profile_uses_default_campaign(monkeypatch, capsys) -> Non
     assert cli.main(["profile", "--progress", "plain"]) == 0
     assert seen == {"source": None, "progress": reporter}
     assert "generated.json" in capsys.readouterr().out
+
+
+def test_cli_rejects_obsolete_batch_search_before_environment(monkeypatch, tmp_path: Path) -> None:
+    path = tmp_path / "obsolete.yaml"
+    path.write_text("batch_search:\n  strategy: auto\n")
+
+    def fail_side_effect(*args, **kwargs):
+        pytest.fail("profiling side effect before campaign validation")
+
+    monkeypatch.setattr(api, "collect_environment", fail_side_effect)
+    with pytest.raises(ValueError, match=r"unknown batch_search field.*strategy"):
+        cli.main(["profile", str(path), "--progress", "quiet"])
