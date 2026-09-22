@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from importlib.util import find_spec
 from types import MappingProxyType
 
+import torch
+
 from .descriptors import ExecutionContext, OperatorDescriptor
 from .implementations import ImplementationRegistry, default_implementation_registry
 from .parameters import resolve_parameters
@@ -128,19 +130,25 @@ class PolicyResolver:
         shared = tuple(policy for policy in applicable if policy.target_sm is None)
         return external + exact + shared
 
-    def _warning(self, context: ExecutionContext) -> str | None:
+    def warn_for_sm(self, sm: tuple[int, int] | None) -> str | None:
+        """Describe a mismatch, emitting once only outside compiler tracing.
+
+        Adaptive modules also call this at construction/device placement, so a
+        first compiled call requires neither an eager warm-up nor a report.
+        """
         if (
-            self.external is None
+            sm is None
+            or self.external is None
             or self.external.vendor != "nvidia"
             or self.external.target_sm is None
-            or self.external.target_sm == context.sm
+            or self.external.target_sm == sm
         ):
             return None
         message = (
             f"policy {self.external.name!r} targets SM {self.external.target_sm}, "
-            f"but the current device is SM {context.sm}; applying it as requested"
+            f"but the current device is SM {sm}; applying it as requested"
         )
-        if message not in self._warned:
+        if not torch.compiler.is_compiling() and message not in self._warned:
             warnings.warn(message, UserWarning, stacklevel=3)
             self._warned.add(message)
         return message
@@ -159,7 +167,7 @@ class PolicyResolver:
                 "guard",
                 guard_reason="requires CUDA with a known NVIDIA SM",
             )
-        warning = self._warning(context)
+        warning = self.warn_for_sm(context.sm)
         for policy in self.context_layers(context):
             for rule in policy.rules:
                 selection = rule.use.get(phase)

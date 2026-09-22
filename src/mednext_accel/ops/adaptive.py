@@ -104,7 +104,20 @@ def _conv_descriptor(
     )
 
 
-class AdaptivePointwise3d(nn.Module):
+class _AdaptiveConv3d(nn.Module):
+    def _warn_for_device(self) -> None:
+        # Device placement runs eagerly, before Dynamo traces forward. Resolve
+        # still uses the input's actual device and includes its warning text.
+        if self.weight.device.type == "cuda":
+            self.resolver.warn_for_sm(torch.cuda.get_device_capability(self.weight.device))
+
+    def _apply(self, fn, recurse=True):
+        result = super()._apply(fn, recurse=recurse)
+        self._warn_for_device()
+        return result
+
+
+class AdaptivePointwise3d(_AdaptiveConv3d):
     _mednext_accel_backend_kind = "pointwise_gemm"
 
     def __init__(
@@ -129,6 +142,7 @@ class AdaptivePointwise3d(nn.Module):
         self.resolver = resolver
         self.model_context = model_context
         self.train(conv.training)
+        self._warn_for_device()
 
     def decision_for_shape(
         self,
@@ -176,7 +190,7 @@ class AdaptivePointwise3d(nn.Module):
         return F.conv3d(x, self.weight, self.bias)
 
 
-class AdaptiveDepthwise3d(nn.Module):
+class AdaptiveDepthwise3d(_AdaptiveConv3d):
     _mednext_accel_backend_kind = "depthwise"
 
     def __init__(
@@ -206,6 +220,7 @@ class AdaptiveDepthwise3d(nn.Module):
         self.resolver = resolver
         self.model_context = model_context
         self.train(conv.training)
+        self._warn_for_device()
 
     def _reference(self, x: Tensor) -> Tensor:
         if self.transpose:

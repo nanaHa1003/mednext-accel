@@ -151,7 +151,10 @@ def test_runtime_sm_changes_after_factory_construction(monkeypatch):
         assert resolver.resolve(op(32), context(10, 128, sm), "backward_weight").policy == expected
 
 
-def test_external_yaml_falls_through_and_reports_policy_fields(tmp_path, monkeypatch):
+@pytest.mark.parametrize("target_sm", [None, [8, 9]])
+def test_external_yaml_falls_through_and_reports_policy_fields(tmp_path, monkeypatch, target_sm):
+    import warnings
+
     import torch
 
     from mednext_accel import CheckpointConfig, mednext_small
@@ -170,6 +173,8 @@ def test_external_yaml_falls_through_and_reports_policy_fields(tmp_path, monkeyp
             }
         ],
     }
+    if target_sm is not None:
+        policy["target"]["sm"] = target_sm
     path = tmp_path / "local.policy.yaml"
     path.write_text(yaml.safe_dump(policy))
     monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
@@ -183,9 +188,16 @@ def test_external_yaml_falls_through_and_reports_policy_fields(tmp_path, monkeyp
         "get_device_properties",
         lambda *a: type("GPU", (), {"total_memory": 96 * 2**30})(),
     )
-    report = model.explain_optimization(
-        input_shape=(64, 1, 128, 128, 128), dtype="bfloat16", device="cuda"
-    )
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        report = model.explain_optimization(
+            input_shape=(64, 1, 128, 128, 128), dtype="bfloat16", device="cuda"
+        )
+        repeated = model.explain_optimization(
+            input_shape=(64, 1, 128, 128, 128), dtype="bfloat16", device="cuda"
+        )
+    assert len(caught) == (1 if target_sm else 0)
+    assert report.warnings == repeated.warnings == tuple(str(item.message) for item in caught)
     assert report.policies == ("local", "sm120", "shared-nvidia")
     stem = next(d for d in report.decisions if d.descriptor.role == "stem")
     assert stem.policy == "local" and stem.rule == "blocked" and stem.implementation == "reference"

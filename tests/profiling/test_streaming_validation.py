@@ -260,3 +260,150 @@ def test_child_failure_payload_survives_subprocess_ingestion(monkeypatch):
         ),
     )
     assert runner._invoke({"kind": "model"}) == raw
+
+
+_COMPONENTS = ("output", "dX", "dW", "dB")
+
+
+@pytest.mark.parametrize(
+    "invalid_component,failure_component",
+    [
+        (bad, later)
+        for index, bad in enumerate(_COMPONENTS)
+        for later in (*_COMPONENTS[index + 1 :], "timing")
+    ],
+)
+@pytest.mark.parametrize("exception", [torch.cuda.OutOfMemoryError, RuntimeError])
+def test_numerical_failure_survives_later_failure_and_subprocess_ingestion(
+    cpu_probe, monkeypatch, invalid_component, failure_component, exception
+):
+    import json
+    import sys
+
+    from mednext_accel.profiling.benchmark import run_json_subprocess
+    from mednext_accel.profiling.matrix import KernelCase, KernelCaseKey
+    from mednext_accel.profiling.synthesize import measurement_from_result, synthesize_profile
+
+    validate_pair = runner._validate_pair
+
+    def failure():
+        raise exception("failure after a known numerical rejection")
+
+    def inject(probe, name, native, candidate):
+        if name == invalid_component:
+            original_candidate = candidate
+
+            def candidate():
+                return torch.zeros_like(original_candidate())
+
+        if name == failure_component:
+            native = failure
+        return validate_pair(probe, name, native, candidate)
+
+    monkeypatch.setattr(runner, "_validate_pair", inject)
+    if failure_component == "timing":
+        monkeypatch.setattr(runner, "_timed", lambda *args, **kwargs: failure())
+    raw = runner._pointwise_probe(cpu_probe)
+    encoded = json.dumps(raw)
+    monkeypatch.setattr(
+        runner,
+        "run_json_subprocess",
+        lambda *args, **kwargs: run_json_subprocess(
+            [sys.executable, "-c", f"print({encoded!r})"], timeout=5
+        ),
+    )
+    ingested = runner._invoke({"kind": "pointwise"})
+    case = KernelCase(
+        KernelCaseKey(
+            "pointwise_conv3d",
+            "regular",
+            "training",
+            cpu_probe["batch"],
+            cpu_probe["spatial_shape"],
+            cpu_probe["in_channels"],
+            cpu_probe["out_channels"],
+            1,
+            "bfloat16",
+            "pointwise_gemm_per_sample",
+            (),
+        )
+    )
+    measurement = measurement_from_result(case, ingested, checkpointing="none")
+    assert measurement.kernel_valid is False
+    assert measurement.probe_status == (
+        "oom" if exception is torch.cuda.OutOfMemoryError else "error"
+    )
+    assert measurement.failure_stage == (
+        "timing.reference"
+        if failure_component == "timing"
+        else f"validation.{failure_component}.reference"
+    )
+    assert measurement.validation_metrics[invalid_component]["relative_l2"] == 1.0
+    assert measurement.rejection_reason.startswith(f"{invalid_component}:")
+    assert len(measurement.validation_metrics) == (
+        4 if failure_component == "timing" else _COMPONENTS.index(failure_component)
+    )
+    policy = synthesize_profile(
+        [measurement], name="known-invalid", sm=(8, 9), objective="balanced"
+    )
+    assert len(policy.rules) == 1
+    assert policy.rules[0].use["training"].implementation == "reference"
+    assert policy.rules[0].when["batch"].minimum == cpu_probe["batch"]
+    assert policy.rules[0].when["batch"].maximum == cpu_probe["batch"]
+    assert policy.rules[0].when["spatial_shape"] == cpu_probe["spatial_shape"]
+
+
+@pytest.mark.cuda
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.parametrize("exception", [torch.cuda.OutOfMemoryError, RuntimeError])
+def test_cuda_probe_retains_numerical_rejection_before_later_failure(monkeypatch, exception):
+    from mednext_accel.profiling.matrix import KernelCase, KernelCaseKey
+    from mednext_accel.profiling.synthesize import measurement_from_result, synthesize_profile
+
+    validate_pair = runner._validate_pair
+
+    def inject(probe, name, native, candidate):
+        if name == "output":
+            original = candidate
+
+            def candidate():
+                return torch.zeros_like(original())
+        elif name == "dX":
+
+            def native():
+                raise exception("later CUDA component failure")
+
+        return validate_pair(probe, name, native, candidate)
+
+    monkeypatch.setattr(runner, "_validate_pair", inject)
+    result = runner._pointwise_probe(
+        {
+            "batch": 1,
+            "in_channels": 1,
+            "out_channels": 32,
+            "spatial_shape": (8, 8, 8),
+            "seed": 17,
+        }
+    )
+    case = KernelCase(
+        KernelCaseKey(
+            "pointwise_conv3d",
+            "regular",
+            "training",
+            1,
+            (8, 8, 8),
+            1,
+            32,
+            1,
+            "bfloat16",
+            "pointwise_gemm_per_sample",
+            (),
+        )
+    )
+    record = measurement_from_result(case, result, checkpointing="none")
+    assert record.kernel_valid is False
+    assert record.failure_stage == "validation.dX.reference"
+    assert record.validation_metrics["output"]["relative_l2"] == 1.0
+    policy = synthesize_profile([record], name="invalid", sm=(8, 9), objective="balanced")
+    assert len(policy.rules) == 1
+    assert policy.rules[0].use["training"].implementation == "reference"

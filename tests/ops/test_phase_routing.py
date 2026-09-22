@@ -1,13 +1,19 @@
 """Real CUDA phase dispatch, native masks, autocast and compiled autograd."""
 
 import copy
+import warnings
 
 import pytest
 import torch
 from torch import nn
 from torch.utils._python_dispatch import TorchDispatchMode
 
-from mednext_accel.ops.adaptive import AdaptiveDepthwise3d, ModelOptimizationContext
+from mednext_accel.ops.adaptive import (
+    AdaptiveDepthwise3d,
+    AdaptivePointwise3d,
+    ModelOptimizationContext,
+    _context_from_tensor,
+)
 from mednext_accel.optimization.policy import parse_policy
 from mednext_accel.optimization.policy_resolver import PolicyResolver
 
@@ -158,4 +164,73 @@ def test_factory_checkpoint_modes_execute_shared_optimized_gradients(style, stag
         got = torch.autograd.grad(actual, (y, *candidate.parameters()), gradient)
     assert backward.masks == [(False, False, True)]
     for value, target in zip(got, wanted, strict=True):
+        assert (value.float() - target.float()).norm() / target.float().norm() < 0.02
+
+
+@pytest.mark.parametrize("kind", ["pointwise", "depthwise"])
+@pytest.mark.parametrize("placement", ["construction", "move", "late-policy"])
+def test_cross_sm_policy_first_fullgraph_call_warns_once_outside_trace(kind, placement):
+    torch.manual_seed(59)
+    actual_sm = torch.cuda.get_device_capability()
+    target_sm = (8, 9) if actual_sm != (8, 9) else (8, 6)
+    phase = "training" if kind == "pointwise" else "backward_input"
+    implementation = "pointwise_gemm_per_sample" if kind == "pointwise" else "triton_depthwise_dx"
+    policy = parse_policy(
+        {
+            "version": 2,
+            "kind": "mednext-accel-policy",
+            "name": "cross-sm-first-call",
+            "target": {"vendor": "nvidia", "sm": list(target_sm)},
+            "rules": [
+                {
+                    "id": "custom",
+                    "when": {"family": f"{kind}_conv3d", "direction": "regular"},
+                    "use": {phase: {"implementation": implementation}},
+                    "confidence": "inferred-same-sm",
+                }
+            ],
+        }
+    )
+    resolver = PolicyResolver(external=policy)
+    cls = AdaptivePointwise3d if kind == "pointwise" else AdaptiveDepthwise3d
+    reference = nn.Conv3d(
+        2,
+        2,
+        1 if kind == "pointwise" else 3,
+        padding=0 if kind == "pointwise" else 1,
+        groups=1 if kind == "pointwise" else 2,
+        device="cuda" if placement == "construction" else "cpu",
+    )
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        candidate = cls(
+            copy.deepcopy(reference),
+            PolicyResolver() if placement == "late-policy" else resolver,
+            ModelOptimizationContext("mednext_v1", "base", "none"),
+        ).cuda()
+        if placement == "late-policy":
+            candidate.resolver = resolver
+        assert sum("applying it as requested" in str(item.message) for item in caught) == (
+            0 if placement == "late-policy" else 1
+        )
+        reference = reference.cuda()
+        x = torch.randn(1, 2, 5, 5, 5, device="cuda", requires_grad=True)
+        y = x.detach().clone().requires_grad_()
+        # No prior eager forward or policy report is allowed here.
+        actual = torch.compile(candidate, fullgraph=True)(y)
+        expected = reference(x)
+        gradient = torch.randn_like(expected)
+        got = torch.autograd.grad(actual, (y, *candidate.parameters()), gradient)
+        wanted = torch.autograd.grad(expected, (x, *reference.parameters()), gradient)
+        decision = resolver.resolve(
+            candidate.descriptor,
+            _context_from_tensor(x, candidate.model_context, training=True),
+            phase,
+        )
+        candidate.cpu().cuda()(x)
+    notices = [item for item in caught if "applying it as requested" in str(item.message)]
+    assert len(notices) == 1
+    assert decision.implementation == implementation
+    assert decision.warning == str(notices[0].message)
+    for value, target in zip((actual, *got), (expected, *wanted), strict=True):
         assert (value.float() - target.float()).norm() / target.float().norm() < 0.02

@@ -290,3 +290,35 @@ def test_decisions_are_immutable_and_report_tensor_time_checks():
     assert {"grad_enabled", "rank_5", "contiguous"} <= set(decisions[0].execution_guards)
     with pytest.raises(TypeError):
         decisions[0].parameters["dw_splits"] = 100
+
+
+def test_compiled_resolution_retains_warning_text_without_consuming_eager_notice(monkeypatch):
+    import torch
+
+    external = policy("external", [rule()], sm=(12, 0))
+    subject = resolver(external=external)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        with monkeypatch.context() as tracing:
+            tracing.setattr(torch.compiler, "is_compiling", lambda: True)
+            compiled = subject.resolve(descriptor(), context(), "backward_weight")
+        assert len(caught) == 0
+        assert compiled.implementation == "triton_split_dw"
+        eager = subject.resolve(descriptor(), context(), "backward_weight")
+        repeated = subject.resolve(descriptor(), context(), "backward_weight")
+    assert len(caught) == 1
+    assert compiled.warning == eager.warning == repeated.warning == str(caught[0].message)
+
+
+def test_warning_tracks_device_changes_without_freezing_execution_sm():
+    subject = resolver(external=policy("external", [rule()], sm=(8, 9)))
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        same = subject.resolve(descriptor(), context(), "backward_weight")
+        first = subject.resolve(descriptor(), context(sm=(12, 0)), "backward_weight")
+        other = subject.resolve(descriptor(), context(sm=(8, 6)), "backward_weight")
+        back = subject.resolve(descriptor(), context(sm=(12, 0)), "backward_weight")
+    assert same.warning is None
+    assert len(caught) == 2
+    assert first.warning == back.warning != other.warning
+    assert first.parameters != other.parameters

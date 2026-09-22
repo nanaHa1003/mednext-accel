@@ -100,6 +100,10 @@ def _validate_pair(probe, name, native, candidate):
     actual = candidate()
     probe.stage = f"validation.{name}.metrics"
     result = validate_components({name: actual}, {name: expected})
+    # A single numerical rejection is conclusive even when a later component
+    # cannot finish. A passing verdict requires all components to complete.
+    if not result["valid"]:
+        probe.result["valid"] = False
     probe.result["validator"] = result["validator"]
     probe.result.setdefault("validation_metrics", {}).update(result["validation_metrics"])
     if probe.result.get("rejection_reason") is None:
