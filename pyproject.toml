@@ -37,7 +37,7 @@ Issues = "https://github.com/nanaHa1003/mednext-accel/issues"
 mednext-accel = "mednext_accel.profiling.cli:main"
 
 [tool.hatch.build]
-exclude = ["/.superpowers"]
+exclude = ["/.superpowers", "*-local.json", "*-local.policy.yaml", "*.evidence.json"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mednext_accel"]

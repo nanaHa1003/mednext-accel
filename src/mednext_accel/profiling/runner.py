@@ -33,7 +33,6 @@ from .progress import ProgressEvent, ProgressReporter
 from .synthesize import (
     Measurement,
     measurement_from_result,
-    measurement_identity,
     synthesize_profile,
 )
 from .validation import validate_components
@@ -701,24 +700,6 @@ class CampaignRun:
     batch_searches: tuple[BatchSearchEvidence, ...] = ()
     model_comparisons: tuple[ModelComparisonEvidence, ...] = ()
 
-    @property
-    def policy_measurements(self) -> tuple[Measurement, ...]:
-        """Temporary publication input; source numerical evidence stays intact.
-
-        Final negative-only overlays and policy publication are handled separately.
-        A rejection removes positive rules for every indistinguishable match.
-        """
-        rejected = {
-            measurement_identity(item)
-            for comparison in self.model_comparisons
-            if not comparison.policy_accepted
-            for item in self.measurements
-            if item.batch == comparison.batch and item.workload == comparison.workload
-        }
-        return tuple(
-            item for item in self.measurements if measurement_identity(item) not in rejected
-        )
-
 
 def execute_campaign(campaign: Campaign, progress: ProgressReporter | None = None) -> CampaignRun:
     """Execute shared kernel groups and validate each workload's decision boundaries."""
@@ -807,17 +788,16 @@ def execute_campaign(campaign: Campaign, progress: ProgressReporter | None = Non
             for key in workload_run.case_keys
         )
         endpoints = workload_run.batches
-        provisional = (
-            synthesize_profile(
-                context_measurements,
-                name="campaign-candidate",
-                sm=torch.cuda.get_device_capability(),
-                objective=campaign.objective,
-            )
-            if endpoints
-            else None
-        )
-        validation_plans.append((workload_run, context_measurements, endpoints, provisional))
+        validation_plans.append((workload_run, context_measurements, endpoints))
+
+    measurements = tuple(item for _, items, _ in validation_plans for item in items)
+    sm = torch.cuda.get_device_capability()
+    provisional = synthesize_profile(
+        measurements,
+        name=f"sm{sm[0]}{sm[1]}-local",
+        sm=sm,
+        objective=campaign.objective,
+    )
 
     validation_total = sum(len(item[2]) for item in validation_plans)
     if progress is not None:
@@ -830,13 +810,11 @@ def execute_campaign(campaign: Campaign, progress: ProgressReporter | None = Non
         )
         progress.emit(ProgressEvent("stage_start", "validation", total=validation_total))
 
-    measurements: list[Measurement] = []
     validation_count = 0
     model_comparisons = []
-    for workload_run, context_measurements, endpoints, provisional in validation_plans:
+    for workload_run, _context_measurements, endpoints in validation_plans:
         workload = workload_run.workload
         for batch in endpoints:
-            assert provisional is not None
             candidate_step = _invoke(
                 {
                     "kind": "model",
@@ -880,7 +858,6 @@ def execute_campaign(campaign: Campaign, progress: ProgressReporter | None = Non
                         message=f"batch={batch} {comparison.reason}",
                     )
                 )
-        measurements.extend(context_measurements)
 
     return CampaignRun(
         measurements=tuple(measurements),

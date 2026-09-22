@@ -1,14 +1,12 @@
 import json
-from dataclasses import replace
 
 import pytest
+import torch
 
-from mednext_accel.optimization.policy import OptimizationPolicy
-from mednext_accel.optimization.policy_io import load_policy
 from mednext_accel.profiling import api, cli, runner
 from mednext_accel.profiling.campaign import load_campaign
 from mednext_accel.profiling.runner import CampaignRun, ExecutionStatistics
-from mednext_accel.profiling.synthesize import Measurement, synthesize_profile
+from mednext_accel.profiling.synthesize import Measurement
 
 
 def measured() -> Measurement:
@@ -31,42 +29,7 @@ def measured() -> Measurement:
     )
 
 
-def test_profile_saves_runtime_policy_atomically_and_keeps_measurements_on_result(
-    monkeypatch, tmp_path
-) -> None:
-    environment = {
-        "gpu": {"name": "NVIDIA RTX 5090", "sm": [12, 0]},
-        "software": {"torch": "2.9"},
-    }
-    campaign_run = CampaignRun(
-        measurements=(measured(),),
-        statistics=ExecutionStatistics(
-            requested_case_count=576,
-            kernel_case_count=192,
-            kernel_group_count=20,
-            whole_model_validation_count=2,
-        ),
-    )
-    monkeypatch.setattr(api, "collect_environment", lambda: environment)
-    monkeypatch.setattr(api, "execute_campaign", lambda campaign, progress=None: campaign_run)
-    monkeypatch.setattr(api.torch.cuda, "is_available", lambda: True)
-    monkeypatch.setattr(api.torch.cuda, "get_device_capability", lambda: (12, 0))
-    monkeypatch.setattr(api, "default_profile_path", lambda profile: tmp_path / "profile.json")
-
-    result = api.profile(load_campaign(None))
-
-    assert result.output_path.exists()
-    saved = json.loads(result.output_path.read_text())
-    assert saved["name"] == "sm120-local"
-    assert saved["version"] == 2
-    assert "measurements" not in saved and "defaults" not in saved
-    assert load_policy(result.output_path) == result.profile
-    assert result.measurements == campaign_run.measurements
-    assert result.environment == environment
-
-
 def test_profile_reports_the_complete_environment_summary(monkeypatch, tmp_path) -> None:
-    generated = synthesize_profile([], name="sm89-local", sm=(8, 9), objective="balanced")
     environment = {
         "python": "3.11.13",
         "platform": "Linux-6.8-x86_64",
@@ -103,11 +66,8 @@ def test_profile_reports_the_complete_environment_summary(monkeypatch, tmp_path)
         lambda campaign, progress=None: CampaignRun((), ExecutionStatistics(0, 0, 0, 0)),
     )
     monkeypatch.setattr(
-        api,
-        "synthesize_campaign",
-        lambda campaign, values, environment=None, execution=None: generated,
+        api, "default_policy_path", lambda policy: tmp_path / "sm89-local.policy.yaml"
     )
-    monkeypatch.setattr(api, "default_profile_path", lambda profile: tmp_path / "profile.json")
 
     api.profile(load_campaign(None), progress=reporter)
 
@@ -128,68 +88,7 @@ def test_profile_reports_the_complete_environment_summary(monkeypatch, tmp_path)
     ):
         assert value in summary
     assert reporter.events[1].stage == "output"
-    assert str(tmp_path / "profile.json") in reporter.events[1].message
-
-
-def test_campaign_synthesis_keeps_adjacent_workload_maxima_as_exact_rules(monkeypatch) -> None:
-    campaign = load_campaign(
-        {
-            "workloads": [
-                {
-                    "variant": "base",
-                    "spatial": [128, 128, 128],
-                    "checkpointing": "none",
-                    "out_channels": 3,
-                },
-                {
-                    "variant": "base",
-                    "spatial": [128, 128, 128],
-                    "checkpointing": "none",
-                    "out_channels": 8,
-                },
-            ]
-        }
-    )
-    first = replace(
-        measured(),
-        batch=2,
-        spatial_shape=(128, 128, 128),
-        checkpointing="none",
-    )
-    second = replace(first, batch=3)
-    monkeypatch.setattr(api.torch.cuda, "is_available", lambda: True)
-    monkeypatch.setattr(api.torch.cuda, "get_device_capability", lambda: (8, 9))
-
-    generated = api.synthesize_campaign(campaign, (first, second))
-
-    assert [
-        (rule.when["batch"].minimum, rule.when["batch"].maximum) for rule in generated.rules
-    ] == [
-        (2, 2),
-        (3, 3),
-    ]
-    assert [rule.confidence for rule in generated.rules] == [
-        "measured-exact-context",
-        "measured-exact-context",
-    ]
-
-
-def test_generated_policy_round_trips_through_json(monkeypatch, tmp_path) -> None:
-    campaign = load_campaign(None)
-    monkeypatch.setattr(api.torch.cuda, "is_available", lambda: True)
-    monkeypatch.setattr(api.torch.cuda, "get_device_capability", lambda: (8, 9))
-    generated = api.synthesize_campaign(campaign, (measured(),))
-    destination = api.write_profile_atomic(tmp_path / "policy.json", generated)
-    assert load_policy(destination) == generated
-
-
-def test_profiling_result_preserves_three_argument_constructor(tmp_path) -> None:
-    generated: OptimizationPolicy = synthesize_profile(
-        [], name="test", sm=(8, 9), objective="balanced"
-    )
-    result = api.ProfilingResult(generated, (), tmp_path / "profile.json")
-
-    assert result.environment == {}
+    assert str(tmp_path / "sm89-local.policy.yaml") in reporter.events[1].message
 
 
 def test_public_run_campaign_remains_tuple_compatible(monkeypatch) -> None:
@@ -233,9 +132,9 @@ def test_public_profile_rejects_dtypes_before_any_profiling_side_effect(
         pytest.fail("profiling side effect before dtype validation")
 
     monkeypatch.setattr(api, "collect_environment", forbidden)
-    monkeypatch.setattr(api, "default_profile_path", forbidden)
+    monkeypatch.setattr(api, "default_policy_path", forbidden)
     monkeypatch.setattr(api, "execute_campaign", forbidden)
-    monkeypatch.setattr(api.torch.cuda, "is_available", forbidden)
+    monkeypatch.setattr(torch.cuda, "is_available", forbidden)
     monkeypatch.setattr(runner, "discover_workload_shapes", forbidden)
     monkeypatch.setattr(runner, "_invoke", forbidden)
 
@@ -256,7 +155,7 @@ def test_phases_rejected_before_environment_and_cuda(monkeypatch, tmp_path, entr
         pytest.fail("side effects before rejecting phases")
 
     monkeypatch.setattr(api, "collect_environment", forbidden)
-    monkeypatch.setattr(api.torch.cuda, "is_available", forbidden)
+    monkeypatch.setattr(torch.cuda, "is_available", forbidden)
     with pytest.raises(ValueError, match="phases.*removed.*training"):
         if entrypoint == "api":
             api.profile(source)

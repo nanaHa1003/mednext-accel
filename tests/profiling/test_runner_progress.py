@@ -312,8 +312,11 @@ def test_campaign_shares_groups_and_materializes_each_checkpoint_context(monkeyp
             context = payload["workload"]["checkpointing"]
             validations[context].append(payload["batch"])
             profile = payload["optimization"]
-            assert {r["when"]["checkpointing"] for r in profile["rules"]} == {context}
-            assert len(profile["rules"]) == 5
+            assert {r["when"]["checkpointing"] for r in profile["rules"]} == {
+                "none",
+                "all-expansion",
+            }
+            assert len(profile["rules"]) == 10
             return {"status": "ok", "step_ms": 8.0, "peak_bytes": 100}
         return _successful_group(payload)
 
@@ -407,7 +410,7 @@ def test_selected_batch_rejection_preserves_kernel_evidence_and_records_policy_o
     assert run.model_comparisons[0].candidate.status == ("error" if rejection == "error" else "ok")
     assert run.model_comparisons[0].reference.step_ms == 10.0
     assert [item["name"] for item in run.model_comparisons[0].effective_policy] == [
-        "campaign-candidate",
+        "sm89-local",
         "sm89",
         "shared-nvidia",
     ]
@@ -456,7 +459,7 @@ def test_variants_validate_independently_against_their_own_reference(monkeypatch
             )
         )
         assert payload["optimization"]["version"] == 2
-        assert len(payload["optimization"]["rules"]) == 1
+        assert len(payload["optimization"]["rules"]) == 3
         return {"status": "ok", "step_ms": 8.0, "peak_bytes": 100}
 
     monkeypatch.setattr(runner, "_invoke", invoke)
@@ -471,7 +474,7 @@ def test_variants_validate_independently_against_their_own_reference(monkeypatch
     assert run.statistics.requested_case_count == 3
 
     profile = synthesize_profile(
-        run.policy_measurements, name="final", sm=(8, 9), objective="balanced"
+        run.measurements, name="final", sm=(8, 9), objective="balanced", include_winners=False
     )
     resolver = PolicyResolver(external=profile)
     descriptor = OperatorDescriptor(
@@ -493,9 +496,7 @@ def test_variants_validate_independently_against_their_own_reference(monkeypatch
                     checkpointing,
                 )
                 decision = resolver.resolve(descriptor, context, "training")
-                assert decision.implementation == (
-                    "reference" if checkpointing == "none" else "pointwise_gemm_per_sample"
-                )
+                assert decision.implementation == ("reference")
     assert [m.kernel_valid for m in run.measurements] == [True, True, True]
     assert [item.policy_accepted for item in run.model_comparisons] == [True, False, True]
 
@@ -678,7 +679,7 @@ def test_campaign_profiles_and_validates_only_each_contexts_selected_maximum(mon
         batch = payload["batch"]
         if "optimization" in payload:
             validations[context].append(batch)
-            assert {r["when"]["batch"] for r in payload["optimization"]["rules"]} == {batch}
+            assert {r["when"]["batch"] for r in payload["optimization"]["rules"]} == {3, 5}
             return {"status": "ok", "step_ms": 8.0, "peak_bytes": 100}
         references[context].append(batch)
         if context == "none" and batch > 3:
@@ -703,9 +704,7 @@ def test_campaign_profiles_and_validates_only_each_contexts_selected_maximum(mon
         ("all-expansion", 5),
     ]
     assert run.statistics.whole_model_validation_count == 2
-    profile = synthesize_profile(
-        run.policy_measurements, name="final", sm=(8, 9), objective="balanced"
-    )
+    profile = synthesize_profile(run.measurements, name="final", sm=(8, 9), objective="balanced")
     assert {(rule.when["batch"].minimum, rule.when["batch"].maximum) for rule in profile.rules} == {
         (3, 3),
         (5, 5),
@@ -724,3 +723,26 @@ def test_batch_probe_with_invalid_metrics_is_recorded_and_cannot_be_selected(
     assert selected.batches == ()
     assert selected.evidence.attempts[0].feasible is False
     assert f"invalid {metric}" in selected.evidence.attempts[0].reason
+
+
+def test_all_model_comparisons_execute_the_same_complete_campaign_overlay(monkeypatch):
+    _prepare_campaign(monkeypatch, batches=(3,))
+    documents = []
+
+    def invoke(payload):
+        if payload["kind"] != "model":
+            return _successful_group(payload)
+        documents.append(payload["optimization"])
+        return {"status": "ok", "step_ms": 8.0, "peak_bytes": 100}
+
+    monkeypatch.setattr(runner, "_invoke", invoke)
+    run = runner.execute_campaign(_campaign_contexts())
+    assert len(documents) == 2
+    assert documents[0] == documents[1]
+    assert {r["when"]["checkpointing"] for r in documents[0]["rules"]} == {"none", "all-expansion"}
+    assert run.model_comparisons[0].effective_policy == run.model_comparisons[1].effective_policy
+    assert [layer["name"] for layer in run.model_comparisons[0].effective_policy] == [
+        "sm89-local",
+        "sm89",
+        "shared-nvidia",
+    ]

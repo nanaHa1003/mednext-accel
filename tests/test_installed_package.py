@@ -24,6 +24,9 @@ def test_distributions_exclude_local_review_scratch_and_cache_files(tmp_path: Pa
     )
     artifacts = (
         ".superpowers/sdd/review.md",
+        "sm89-local.json",
+        "sm89-local.123-abc.evidence.json",
+        "sm89-local.policy.yaml",
         "dist/final-fix-scratch/probe.json",
         ".pytest_cache/results.json",
         ".ruff_cache/checks.json",
@@ -47,7 +50,11 @@ def test_distributions_exclude_local_review_scratch_and_cache_files(tmp_path: Pa
         assert any(name.endswith("mednext_accel/__init__.py") for name in names)
         for profile in ("shared-nvidia", "sm86", "sm89", "sm120"):
             assert any(name.endswith(f"mednext_accel/policies/{profile}.yaml") for name in names)
-        assert not any(name.endswith("-local.json") or "/profiles/" in name for name in names)
+        assert not any(
+            name.endswith(("-local.json", ".evidence.json", "-local.policy.yaml"))
+            or "/profiles/" in name
+            for name in names
+        )
         assert not any(
             part
             in {".superpowers", "final-fix-scratch", ".pytest_cache", ".ruff_cache", "__pycache__"}

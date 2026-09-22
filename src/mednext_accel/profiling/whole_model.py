@@ -13,14 +13,25 @@ from .evidence import ModelComparisonEvidence, ModelProbeEvidence, model_accepta
 
 
 def effective_policy_identity(policy: OptimizationPolicy, context: ExecutionContext):
-    """Identify the actual ordered external/exact-SM/shared runtime layers."""
+    """Identify ordered runtime layers without their descriptive evidence links.
+
+    Excluding provenance avoids a circular hash when the published policy links
+    back to the evidence containing this comparison. Every runtime field remains
+    covered, so provisional and published selections have the same identity.
+    """
     resolver = PolicyRegistry(external=policy_to_primitive(policy)).resolver()
     return tuple(
         {
             "name": layer.name,
             "sha256": hashlib.sha256(
                 json.dumps(
-                    policy_to_primitive(layer), sort_keys=True, separators=(",", ":")
+                    {
+                        key: value
+                        for key, value in policy_to_primitive(layer).items()
+                        if key != "evidence"
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
                 ).encode()
             ).hexdigest(),
         }

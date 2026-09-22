@@ -1,11 +1,11 @@
 """Provisional profiler dispatch must use the same v2 factory as runtime."""
 
-import json
+import yaml
 
 from mednext_accel import mednext_small
+from mednext_accel.optimization.policy import policy_to_primitive
 from mednext_accel.optimization.policy_io import load_policy
 from mednext_accel.optimization.policy_resolver import PolicyResolver
-from mednext_accel.profiling.api import write_profile_atomic
 from mednext_accel.profiling.synthesize import Measurement, synthesize_profile
 
 
@@ -27,10 +27,12 @@ def test_generated_provisional_policy_roundtrips_and_is_factory_input(tmp_path):
         100,
         True,
         (("dx_block", 128),),
+        kernel_size=3,
     )
     policy = synthesize_profile([item], name="provisional", sm=(12, 0), objective="balanced")
-    path = write_profile_atomic(tmp_path / "provisional.json", policy)
-    document = json.loads(path.read_text())
+    path = tmp_path / "provisional.policy.yaml"
+    path.write_text(yaml.safe_dump(policy_to_primitive(policy)))
+    document = yaml.safe_load(path.read_text())
     assert document.get("version") == 2
     assert "defaults" not in document and "measurements" not in document
     assert load_policy(path) == policy

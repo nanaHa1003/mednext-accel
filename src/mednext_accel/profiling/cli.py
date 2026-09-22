@@ -12,7 +12,9 @@ from .progress import create_progress_reporter
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="mednext-accel")
     commands = parser.add_subparsers(dest="command", required=True)
-    command = commands.add_parser("profile", help="benchmark this GPU and write one profile")
+    command = commands.add_parser(
+        "profile", help="benchmark this GPU and write policy YAML plus evidence JSON"
+    )
     command.add_argument("workload", nargs="?", help="optional YAML campaign")
     command.add_argument("--preset", choices=("mednext-v1", "all"))
     command.add_argument(
@@ -36,8 +38,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = profile(source, progress=reporter)
     finally:
         reporter.close()
-    print(f"Optimization profile written to {result.output_path}")
-    print(f"Recorded {len(result.measurements)} validated measurements")
+    print(f"Optimization policy written to {result.artifacts.policy_path}")
+    print(f"Profiling evidence written to {result.artifacts.evidence_path}")
+    print(f"Recorded {len(result.evidence.kernel_measurements)} kernel observations")
+    publication = result.evidence.publication
+    if publication is not None:
+        print(f"Model policy: {publication.reason}")
+        if not publication.matches_tested_policy:
+            print(
+                "Published negative-only overlay; "
+                "bundled fallthrough was not validated by this comparison."
+            )
     return 0
 
 

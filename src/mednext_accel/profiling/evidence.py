@@ -458,6 +458,36 @@ class ModelComparisonEvidence:
 
 
 @dataclass(frozen=True, slots=True)
+class PolicyPublicationEvidence:
+    """Whether the published overlay retains the effective policy that was tested."""
+
+    policy_accepted: bool | None
+    matches_tested_policy: bool
+    bundled_fallthrough: str
+    reason: str
+
+    def __post_init__(self):
+        require_bool(self.policy_accepted, "publication.policy_accepted", nullable=True)
+        require_bool(self.matches_tested_policy, "publication.matches_tested_policy")
+        accepted = self.policy_accepted is True
+        if self.matches_tested_policy is not accepted:
+            raise ValueError("publication matches_tested_policy contradicts policy acceptance")
+        expected = "tested" if accepted else "not-validated-by-model-comparison"
+        if self.bundled_fallthrough != expected:
+            raise ValueError("publication bundled_fallthrough contradicts policy acceptance")
+        require_string(self.reason, "publication.reason")
+
+    @classmethod
+    def from_comparisons(cls, comparisons):
+        if not comparisons:
+            return cls(None, False, "not-validated-by-model-comparison", "no model comparisons")
+        rejected = next((item for item in comparisons if not item.policy_accepted), None)
+        if rejected is not None:
+            return cls(False, False, "not-validated-by-model-comparison", rejected.reason)
+        return cls(True, True, "tested", "accepted")
+
+
+@dataclass(frozen=True, slots=True)
 class ProfilingEvidence:
     environment: EnvironmentEvidence
     campaign: CampaignEvidence
@@ -465,6 +495,7 @@ class ProfilingEvidence:
     kernel_measurements: tuple[Measurement, ...] = ()
     model_comparisons: tuple[ModelComparisonEvidence, ...] = ()
     execution: Mapping[str, int] = field(default_factory=dict)
+    publication: PolicyPublicationEvidence | None = None
 
     def __post_init__(self):
         from .synthesize import Measurement
@@ -489,6 +520,13 @@ class ProfilingEvidence:
                 or comparison.objective != self.campaign.data["objective"]
             ):
                 raise ValueError("model comparison seed/objective contradicts campaign")
+        if self.publication is not None:
+            if not isinstance(self.publication, PolicyPublicationEvidence):
+                raise ValueError("publication must be PolicyPublicationEvidence")
+            if self.publication != PolicyPublicationEvidence.from_comparisons(
+                self.model_comparisons
+            ):
+                raise ValueError("publication contradicts model comparisons")
         require_mapping(self.execution, "execution")
         for name, count in self.execution.items():
             require_int(count, f"execution.{name}")
@@ -504,6 +542,7 @@ class ProfilingEvidence:
             "kernel_measurements": [item.to_primitive() for item in self.kernel_measurements],
             "model_comparisons": [item.to_primitive() for item in self.model_comparisons],
             "execution": primitive(self.execution),
+            "publication": primitive(self.publication),
         }
 
     @classmethod
@@ -522,6 +561,7 @@ class ProfilingEvidence:
                 "kernel_measurements",
                 "model_comparisons",
                 "execution",
+                "publication",
             },
             "evidence",
         )
@@ -587,4 +627,7 @@ class ProfilingEvidence:
             tuple(load_record(Measurement, item) for item in data["kernel_measurements"]),
             tuple(comparisons),
             data["execution"],
+            None
+            if data["publication"] is None
+            else load_record(PolicyPublicationEvidence, data["publication"]),
         )

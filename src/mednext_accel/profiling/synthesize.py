@@ -227,18 +227,7 @@ def candidate_wins(item: Measurement, objective: Objective) -> bool:
         raise ValueError(f"unknown profiling objective {objective!r}")
     if item.kernel_valid is not True or item.probe_status != "ok":
         return False
-    if any(
-        isinstance(value, bool)
-        or not isinstance(value, (int, float))
-        or not isfinite(value)
-        or value <= 0
-        for value in (
-            item.reference_ms,
-            item.candidate_ms,
-            item.reference_peak_bytes,
-            item.candidate_peak_bytes,
-        )
-    ):
+    if not complete_metrics(item):
         return False
     if objective == "throughput":
         return item.candidate_ms < item.reference_ms
@@ -248,6 +237,19 @@ def candidate_wins(item: Measurement, objective: Objective) -> bool:
         )
     return ratio_at_most(item.candidate_ms, item.reference_ms, 97, 100) and ratio_at_most(
         item.candidate_peak_bytes, item.reference_peak_bytes, 23, 20
+    )
+
+
+def complete_metrics(item: Measurement) -> bool:
+    """Only a completed, finite measurement can establish a performance loser."""
+    return item.probe_status == "ok" and all(
+        type(value) in (int, float) and isfinite(value) and value > 0
+        for value in (
+            item.reference_ms,
+            item.candidate_ms,
+            item.reference_peak_bytes,
+            item.candidate_peak_bytes,
+        )
     )
 
 
@@ -263,108 +265,92 @@ def measurement_identity(item: Measurement) -> tuple[object, ...]:
         item.out_channels,
         item.dtype,
         item.checkpointing,
+        item.kernel_size,
+        item.workload.get("model_family"),
+        item.workload.get("variant"),
     )
 
 
-def selectable_measurements(measurements: Sequence[Measurement]) -> tuple[Measurement, ...]:
-    """Exclude contradictory policy matches without modifying source evidence."""
-    rejected = {measurement_identity(item) for item in measurements if item.kernel_valid is False}
-    return tuple(item for item in measurements if measurement_identity(item) not in rejected)
-
-
 def synthesize_profile(
-    measurements: list[Measurement] | tuple[Measurement, ...],
+    measurements: Sequence[Measurement],
     *,
     name: str,
     sm: tuple[int, int],
     objective: Objective,
-    environment: dict[str, object] | None = None,
-    compile_mode: str | None = None,
-    execution: Mapping[str, int] | None = None,
-    campaign: Mapping[str, object] | None = None,
-    merge_adjacent_batches: bool = True,
+    include_winners: bool = True,
 ) -> OptimizationPolicy:
-    measurements = selectable_measurements(measurements)
-    winners = sorted(
-        (item for item in measurements if candidate_wins(item, objective)),
-        key=lambda item: (
-            item.family,
-            item.direction,
-            item.phase,
-            item.implementation,
-            item.spatial_shape,
-            item.in_channels,
-            item.out_channels,
-            item.dtype,
-            item.checkpointing,
-            item.parameters,
-            item.batch,
-        ),
-    )
-    groups: list[list[Measurement]] = []
-    for item in winners:
-        identity = (
-            item.family,
-            item.direction,
-            item.phase,
-            item.implementation,
-            item.spatial_shape,
-            item.in_channels,
-            item.out_channels,
-            item.dtype,
-            item.checkpointing,
-            item.parameters,
-        )
-        if groups:
-            previous = groups[-1][-1]
-            previous_identity = (
-                previous.family,
-                previous.direction,
-                previous.phase,
-                previous.implementation,
-                previous.spatial_shape,
-                previous.in_channels,
-                previous.out_channels,
-                previous.dtype,
-                previous.checkpointing,
-                previous.parameters,
+    """Build an exact local overlay; missing observations remain policy gaps.
+
+    Numerical failures and complete objective losers explicitly select reference.
+    A later aggregate rejection removes winners, never the negative evidence.
+    """
+    by_match: dict[tuple[object, ...], list[Measurement]] = {}
+    for item in measurements:
+        by_match.setdefault(measurement_identity(item), []).append(item)
+    selected = []
+    for items in by_match.values():
+        negative = next((item for item in items if item.kernel_valid is False), None)
+        if negative is None:
+            negative = next(
+                (
+                    item
+                    for item in items
+                    if item.kernel_valid is True
+                    and complete_metrics(item)
+                    and not candidate_wins(item, objective)
+                ),
+                None,
             )
-            if (
-                merge_adjacent_batches
-                and identity == previous_identity
-                and item.batch == previous.batch + 1
-            ):
-                groups[-1].append(item)
-                continue
-        groups.append([item])
+        if negative is not None:
+            selected.append((negative, "reference", ()))
+        elif include_winners:
+            winner = next((item for item in items if candidate_wins(item, objective)), None)
+            if winner is not None:
+                selected.append((winner, winner.implementation, winner.parameters))
+    # Stable ordering keeps regenerated policies and effective identities deterministic.
+    selected.sort(
+        key=lambda row: (
+            row[0].family,
+            row[0].direction,
+            row[0].phase,
+            row[0].spatial_shape,
+            row[0].in_channels,
+            row[0].out_channels,
+            row[0].dtype,
+            row[0].checkpointing,
+            row[0].kernel_size,
+            row[0].workload.get("model_family", ""),
+            row[0].workload.get("variant", ""),
+            row[0].batch,
+        )
+    )
     rules = []
-    for index, group in enumerate(groups):
-        first, last = group[0], group[-1]
+    for item, implementation, parameters in selected:
+        when = {
+            "family": item.family,
+            "direction": item.direction,
+            "batch": item.batch,
+            "spatial_shape": list(item.spatial_shape),
+            "channels": [item.in_channels, item.out_channels],
+            "kernel_size": [item.kernel_size] * 3,
+            "stride": [2 if item.direction in ("downsample", "transpose") else 1] * 3,
+            "dtype": item.dtype,
+            "checkpointing": item.checkpointing,
+        }
+        for name_key in ("model_family", "variant"):
+            if name_key in item.workload:
+                when[name_key] = item.workload[name_key]
+        selection = {"implementation": implementation}
+        if parameters:
+            selection["parameters"] = dict(parameters)
         rules.append(
             {
-                "id": f"generated-{index:04d}",
-                "when": {
-                    "family": first.family,
-                    "direction": first.direction,
-                    "batch": {"min": first.batch, "max": last.batch},
-                    "spatial_shape": list(first.spatial_shape),
-                    "channels": [first.in_channels, first.out_channels],
-                    "dtype": first.dtype,
-                    "checkpointing": first.checkpointing,
-                },
-                "use": {
-                    first.phase: {
-                        "implementation": first.implementation,
-                        "parameters": dict(first.parameters),
-                    }
-                },
-                "confidence": "measured-exact-context"
-                if len(group) == 1
-                else "interpolated-bounded",
+                "id": f"generated-{len(rules):04d}",
+                "when": when,
+                "use": {item.phase: selection},
+                "confidence": "measured-exact-context",
             }
         )
-    # Runtime documents contain only dispatch. The measurements remain on the
-    # campaign result pending the separate evidence artifact integration.
     return parse_policy(
         {
             "version": 2,

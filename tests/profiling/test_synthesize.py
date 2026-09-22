@@ -5,7 +5,6 @@ import pytest
 from mednext_accel.profiling.synthesize import (
     Measurement,
     candidate_wins,
-    selectable_measurements,
     synthesize_profile,
 )
 
@@ -30,16 +29,19 @@ def measured(batch: int, reference_ms: float, candidate_ms: float) -> Measuremen
     )
 
 
-def test_adjacent_batches_with_same_winner_merge_into_interval() -> None:
+def test_adjacent_measured_batches_remain_exact_local_rules() -> None:
     profile = synthesize_profile(
         [measured(2, 4.0, 3.0), measured(3, 6.0, 4.5), measured(4, 8.0, 6.2)],
         name="test",
         sm=(12, 0),
         objective="balanced",
     )
-    assert len(profile.rules) == 1
-    assert profile.rules[0].when["batch"].minimum == 2
-    assert profile.rules[0].when["batch"].maximum == 4
+    assert len(profile.rules) == 3
+    assert [(rule.when["batch"].minimum, rule.when["batch"].maximum) for rule in profile.rules] == [
+        (2, 2),
+        (3, 3),
+        (4, 4),
+    ]
     assert profile.rules[0].use["training"].implementation == "pointwise_gemm_per_sample"
 
 
@@ -55,7 +57,11 @@ def test_invalid_candidate_and_memory_objective_choose_safely() -> None:
         }
     )
     profile = synthesize_profile([invalid, memory], name="test", sm=(12, 0), objective="memory")
-    assert profile.rules[0].when["batch"].minimum == 3
+    assert [r.use["training"].implementation for r in profile.rules] == [
+        "reference",
+        "pointwise_gemm_per_sample",
+    ]
+    assert profile.rules[1].when["batch"].minimum == 3
 
 
 def test_reported_winner_uses_the_same_balanced_threshold_as_synthesis() -> None:
@@ -75,8 +81,8 @@ def test_invalid_rule_match_blocks_other_selections_for_the_same_match(selection
         [candidate, rejected], name="test", sm=(12, 0), objective="balanced"
     )
 
-    assert profile.rules == ()
-    assert selectable_measurements([candidate, rejected]) == ()
+    assert len(profile.rules) == 1
+    assert profile.rules[0].use["training"].implementation == "reference"
     assert candidate.kernel_valid is True
 
 
@@ -102,8 +108,15 @@ def test_invalid_rule_match_preserves_distinguishable_candidate(different_match)
         [candidate, rejected], name="test", sm=(12, 0), objective="balanced"
     )
 
-    assert len(profile.rules) == 1
-    assert selectable_measurements([candidate, rejected])[0].kernel_valid is True
+    assert len(profile.rules) == 2
+    assert (
+        sum(
+            rule.use.get("training", rule.use.get("inference")).implementation
+            == "pointwise_gemm_per_sample"
+            for rule in profile.rules
+        )
+        == 1
+    )
 
 
 def test_raw_result_materialization_restores_context_and_uses_planned_identity():
@@ -201,7 +214,7 @@ def test_measurement_serializes_probe_and_numerical_diagnostics():
     assert data["rejection_reason"] == raw["rejection_reason"]
     profile = synthesize_profile([item], name="diagnostic", sm=(8, 9), objective="balanced")
     roundtrip = parse_policy(policy_to_primitive(profile))
-    assert roundtrip.rules == ()
+    assert roundtrip.rules[0].use["training"].implementation == "reference"
     assert item.to_primitive()["kernel_valid"] is False
 
     failure = measurement_from_result(
@@ -229,5 +242,6 @@ def test_conflicting_policy_contexts_do_not_rewrite_kernel_evidence():
     profile = synthesize_profile(
         [candidate, rejected], name="conflicting", sm=(12, 0), objective="balanced"
     )
-    assert profile.rules == ()
+    assert len(profile.rules) == 1
+    assert profile.rules[0].use["training"].implementation == "reference"
     assert before == [item.to_primitive() for item in (candidate, rejected)]

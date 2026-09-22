@@ -64,9 +64,13 @@ def test_zero_argument_profile_uses_default_campaign(monkeypatch, capsys) -> Non
 
     reporter = Reporter()
 
+    from types import SimpleNamespace
+
     class Result:
-        output_path = "generated.json"
-        measurements = ()
+        artifacts = SimpleNamespace(
+            policy_path="generated.policy.yaml", evidence_path="generated.evidence.json"
+        )
+        evidence = SimpleNamespace(kernel_measurements=(), publication=None)
 
     monkeypatch.setattr(
         cli,
@@ -78,7 +82,10 @@ def test_zero_argument_profile_uses_default_campaign(monkeypatch, capsys) -> Non
     monkeypatch.setattr(cli, "create_progress_reporter", lambda mode: reporter)
     assert cli.main(["profile", "--progress", "plain"]) == 0
     assert seen == {"source": None, "progress": reporter}
-    assert "generated.json" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "generated.policy.yaml" in output
+    assert "generated.evidence.json" in output
+    assert "0 kernel observations" in output
 
 
 def test_cli_rejects_obsolete_batch_search_before_environment(monkeypatch, tmp_path: Path) -> None:
