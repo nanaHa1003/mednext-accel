@@ -1,5 +1,6 @@
 import copy
 
+import pytest
 import torch
 from torch import nn
 
@@ -70,3 +71,26 @@ def test_batch_three_can_be_inspected_without_cuda_execution() -> None:
         total_vram_bytes=32 * 2**30,
     )
     assert decision.implementation == "pointwise_gemm_per_sample"
+
+
+@pytest.mark.parametrize("batch", [1, 2, 3])
+@pytest.mark.parametrize("bias", [True, False])
+def test_direct_gemm_matches_convolution_forward_and_gradients(batch, bias) -> None:
+    torch.manual_seed(37)
+    reference = nn.Conv3d(4, 7, 1, bias=bias).double()
+    candidate = AdaptivePointwise3d(
+        copy.deepcopy(reference),
+        _resolver(),
+        ModelOptimizationContext("mednext_v1", "base", "none"),
+    )
+    x = torch.randn(batch, 4, 3, 4, 5, dtype=torch.double, requires_grad=True)
+    y = x.detach().clone().requires_grad_()
+    expected = reference(x)
+    # Bypass resolver's CPU fallback deliberately: this test exercises GEMM.
+    actual = candidate._gemm(y)
+    torch.testing.assert_close(actual, expected)
+    gradient = torch.randn_like(expected)
+    expected_grads = torch.autograd.grad(expected, (x, *reference.parameters()), gradient)
+    actual_grads = torch.autograd.grad(actual, (y, *candidate.parameters()), gradient)
+    for got, want in zip(actual_grads, expected_grads, strict=True):
+        torch.testing.assert_close(got, want)

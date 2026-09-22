@@ -130,3 +130,14 @@ def test_validation_batches_deduplicates_one_batch_segments_in_ascending_order()
         DecisionSegment((1,), signature),
     )
     assert validation_batches(segments) == (1, 2, 3, 4)
+
+
+def test_model_validation_outcome_remains_separate_from_kernel_validity() -> None:
+    measurements = (_measurement(1), _measurement(2, valid=False), _measurement(3))
+    segments = tuple(DecisionSegment((batch,), ()) for batch in (1, 2))
+    updated = apply_validation_results(measurements, segments, accepted={1: False, 2: True})
+
+    assert tuple(item.valid for item in updated) == (False, False, True)
+    assert tuple(item.kernel_valid for item in updated) == (True, False, True)
+    assert tuple(item.whole_model_valid for item in updated) == (False, True, None)
+    assert updated[0].rejection_reason == "whole-model validation rejected segment"

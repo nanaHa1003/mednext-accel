@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from typing import Literal
 
 from ..optimization.schema import OptimizationProfile, parse_profile
@@ -30,6 +30,19 @@ class Measurement:
     candidate_peak_bytes: int
     valid: bool
     parameters: tuple[tuple[str, int], ...] = ()
+    probe_status: str = "ok"
+    probe_message: str | None = None
+    kernel_valid: bool | None = None
+    whole_model_valid: bool | None = None
+    validator: str | None = None
+    validation_metrics: dict[str, dict[str, float | bool | None]] = field(default_factory=dict)
+    rejection_reason: str | None = None
+
+    def __post_init__(self) -> None:
+        # Direct construction predates the diagnostic fields. An unsuccessful
+        # child has no numerical outcome; a successful legacy measurement does.
+        if self.kernel_valid is None and self.probe_status == "ok":
+            object.__setattr__(self, "kernel_valid", self.valid)
 
     def to_primitive(self) -> dict[str, object]:
         return asdict(self)
@@ -65,6 +78,12 @@ def measurement_from_result(
         candidate_peak_bytes=int(result.get("candidate_peak_bytes", 0)) if ok else 0,
         valid=ok and bool(result.get("valid", False)),
         parameters=key.parameters,
+        probe_status=str(result.get("status", "missing")),
+        probe_message=result.get("message"),
+        kernel_valid=bool(result.get("valid", False)) if ok else None,
+        validator=result.get("validator"),
+        validation_metrics=dict(result.get("validation_metrics", {})),
+        rejection_reason=result.get("rejection_reason"),
     )
 
 

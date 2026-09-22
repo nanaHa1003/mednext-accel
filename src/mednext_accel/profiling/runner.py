@@ -32,6 +32,7 @@ from .validation import (
     apply_validation_results,
     decision_signature,
     segment_decisions,
+    validate_components,
     validation_batches,
 )
 
@@ -122,32 +123,36 @@ def _pointwise_probe(payload: dict[str, object]) -> dict[str, object]:
         batch, channels, *spatial, device="cuda", dtype=torch.bfloat16, requires_grad=True
     )
     weight = torch.randn(
-        outputs, channels, 1, 1, 1, device="cuda", dtype=torch.bfloat16, requires_grad=True
+        outputs, channels, 1, 1, 1, device="cuda", dtype=torch.float32, requires_grad=True
     )
-    bias = torch.randn(outputs, device="cuda", dtype=torch.bfloat16, requires_grad=True)
+    bias = torch.randn(outputs, device="cuda", dtype=torch.float32, requires_grad=True)
     gradient = torch.randn(batch, outputs, *spatial, device="cuda", dtype=torch.bfloat16)
 
     def native():
-        output = functional.conv3d(x, weight, bias)
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            output = functional.conv3d(x, weight, bias)
         return (output, *torch.autograd.grad(output, (x, weight, bias), gradient))
 
     def candidate():
-        flat = x.flatten(2)
-        matrix = weight.flatten(1)
-        output = torch.stack(
-            [torch.addmm(bias[:, None], matrix, sample) for sample in flat.unbind()]
-        ).reshape(batch, outputs, *spatial)
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            flat = x.flatten(2)
+            matrix = weight.flatten(1)
+            output = torch.stack(
+                [torch.addmm(bias[:, None], matrix, sample) for sample in flat.unbind()]
+            ).reshape(batch, outputs, *spatial)
         return (output, *torch.autograd.grad(output, (x, weight, bias), gradient))
 
     expected, actual = native(), candidate()
-    valid = all(
-        torch.allclose(a, b, rtol=0.02, atol=0.02) for a, b in zip(actual, expected, strict=True)
+    components = ("output", "dX", "dW", "dB")
+    validation = validate_components(
+        dict(zip(components, actual, strict=True)), dict(zip(components, expected, strict=True))
     )
+    del expected, actual
     native_ms, native_peak = _timed(native)
     candidate_ms, candidate_peak = _timed(candidate)
     return {
         "status": "ok",
-        "valid": valid,
+        **validation,
         "reference_ms": native_ms,
         "candidate_ms": candidate_ms,
         "reference_peak_bytes": native_peak,
@@ -286,12 +291,13 @@ def _depthwise_probe(payload: dict[str, object]) -> dict[str, object]:
         raise ValueError(f"unsupported depthwise probe {direction}/{phase}")
 
     expected, actual = native(), candidate()
-    relative = (actual.float() - expected.float()).norm() / expected.float().norm().clamp_min(1e-12)
+    component = "dX" if phase == "backward_input" else "dW"
+    validation = validate_components({component: actual}, {component: expected})
     native_ms, native_peak = _timed(native)
     candidate_ms, candidate_peak = _timed(candidate)
     return {
         "status": "ok",
-        "valid": relative.item() < 0.02,
+        **validation,
         "implementation": implementation,
         "reference_ms": native_ms,
         "candidate_ms": candidate_ms,

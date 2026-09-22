@@ -172,3 +172,64 @@ def test_single_selected_batch_produces_only_an_exact_batch_rule() -> None:
     assert len(profile.rules) == 1
     assert profile.rules[0].batch.minimum == profile.rules[0].batch.maximum == 13
     assert [item["batch"] for item in profile.measurements] == [13]
+
+
+def test_measurement_serializes_probe_and_numerical_diagnostics():
+    from mednext_accel.optimization.schema import parse_profile, profile_to_primitive
+    from mednext_accel.profiling.matrix import KernelCase, KernelCaseKey
+    from mednext_accel.profiling.synthesize import measurement_from_result
+
+    case = KernelCase(
+        KernelCaseKey(
+            family="pointwise_conv3d",
+            direction="regular",
+            phase="training",
+            batch=2,
+            spatial_shape=(16, 16, 16),
+            in_channels=8,
+            out_channels=16,
+            kernel_size=1,
+            dtype="bfloat16",
+            implementation="pointwise_gemm_per_sample",
+            parameters=(),
+        )
+    )
+    metrics = {"dW": {"finite": True, "relative_l2": 0.03, "max_absolute": 0.5}}
+    raw = {
+        "status": "ok",
+        "message": "completed",
+        "valid": False,
+        "validator": "component-relative-l2-v1",
+        "validation_metrics": metrics,
+        "rejection_reason": "dW: relative L2 error must be below 0.02",
+    }
+    item = measurement_from_result(case, raw, checkpointing="none")
+    data = item.to_primitive()
+    assert data["probe_status"] == "ok"
+    assert data["probe_message"] == "completed"
+    assert data["kernel_valid"] is False
+    assert data["whole_model_valid"] is None
+    assert data["validator"] == "component-relative-l2-v1"
+    assert data["validation_metrics"] == metrics
+    assert data["rejection_reason"] == raw["rejection_reason"]
+    profile = synthesize_profile([item], name="diagnostic", sm=(8, 9), objective="balanced")
+    roundtrip = parse_profile(profile_to_primitive(profile))
+    assert roundtrip.measurements[0] == profile.measurements[0]
+    assert roundtrip.measurements[0]["kernel_valid"] is False
+
+    failure = measurement_from_result(
+        case, {"status": "oom", "message": "CUDA out of memory"}, checkpointing="none"
+    ).to_primitive()
+    assert failure["probe_status"] == "oom"
+    assert failure["probe_message"] == "CUDA out of memory"
+    assert failure["kernel_valid"] is None
+    assert failure["valid"] is False
+
+
+def test_legacy_direct_measurement_defaults_preserve_synthesis():
+    item = measured(1, 4.0, 3.0)
+    assert item.kernel_valid is True
+    assert item.whole_model_valid is None
+    assert item.validator is None
+    assert item.validation_metrics == {}
+    assert candidate_wins(item, "balanced")

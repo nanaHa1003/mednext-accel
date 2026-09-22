@@ -96,3 +96,10 @@ def test_depthwise_probe_executes_planned_parameters_and_labels_evidence(
     evidence = measurement_from_result(case, result, checkpointing="none")
     assert tuple(result["parameters"]) == evidence.parameters == case.key.parameters
     assert result["implementation"] == evidence.implementation == case.key.implementation
+    # The existing all-zero stand-in is a 100% relative-L2 error. Preserve
+    # the old rejection while retaining numerical diagnostics in the evidence.
+    assert result["valid"] is False
+    assert evidence.kernel_valid is False
+    assert evidence.validator == "component-relative-l2-v1"
+    component = "dX" if phase == "backward_input" else "dW"
+    assert evidence.validation_metrics[component]["relative_l2"] == pytest.approx(1.0)
