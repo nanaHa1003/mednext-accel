@@ -93,4 +93,3 @@ Required evidence:
   to reference;
 - source artifact hash and generated-rule equality are audited before commit;
 - full CPU suite, Ruff, package build, Twine, and installed-wheel tests pass.
-

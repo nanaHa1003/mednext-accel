@@ -40,4 +40,3 @@
 - [ ] Independently review the complete diff from `030cb15`.
 - [ ] Confirm the source artifact is untracked, bundled evidence is reproducible, and no unsupported performance claim is made.
 - [ ] Resolve findings, rerun final gates, and leave the worktree clean.
-
