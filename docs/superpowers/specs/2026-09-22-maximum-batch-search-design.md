@@ -1,5 +1,10 @@
 # Maximum-Only Batch Search
 
+> Historical design record. Runtime profile/schema examples and output instructions
+> in this document are superseded by [policy/evidence v2](../specs/2026-09-22-policy-evidence-v2-design.md).
+> Use the current [optimization guide](../../optimization.md) for runnable YAML,
+> CLI commands, and Python APIs.
+
 ## Purpose
 
 The profiler currently mixes two responsibilities: finding the largest batch

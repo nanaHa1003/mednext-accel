@@ -1,5 +1,10 @@
 # Profile-Driven Optimization Implementation Plan
 
+> Historical design record. Runtime profile/schema examples and output instructions
+> in this document are superseded by [policy/evidence v2](../specs/2026-09-22-policy-evidence-v2-design.md).
+> Use the current [optimization guide](../../optimization.md) for runnable YAML,
+> CLI commands, and Python APIs.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace the RTX-5090 exact-table policy with an out-of-the-box operator/phase/implementation registry, deterministic profile resolver, optimized-by-default model factories, and a standalone profiler that automatically synthesizes one reusable configuration.

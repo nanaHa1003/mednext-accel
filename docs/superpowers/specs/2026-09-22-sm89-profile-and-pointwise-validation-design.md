@@ -1,5 +1,10 @@
 # SM89 Profile and Pointwise Validation Design
 
+> Historical design record. Runtime profile/schema examples and output instructions
+> in this document are superseded by [policy/evidence v2](../specs/2026-09-22-policy-evidence-v2-design.md).
+> Use the current [optimization guide](../../optimization.md) for runnable YAML,
+> CLI commands, and Python APIs.
+
 ## Problem
 
 The L40S profile artifact is valid schema-v1 evidence, but its pointwise

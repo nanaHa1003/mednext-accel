@@ -27,7 +27,7 @@ shape-specific CUDA acceleration.
 | Load MONAI checkpoints | No conversion API | Native format | **Automatic; explicit MONAI-compatible factories for Base/Medium/Large** |
 | Activation checkpointing policy | Whole-block checkpointing in published Medium/Large factories | No model-level policy | **Expansion branch or whole block, selectable per resolution stage** |
 | Model-specific optimized training operators | No | No | **Triton depthwise backward and optional pointwise GEMM** |
-| Hardware/shape-aware backend selection | No | No | **Bundled per-SM profiles plus a standalone local profiler** |
+| Hardware/shape-aware backend selection | No | No | **Shared NVIDIA and per-SM policies plus a standalone local profiler** |
 | Explicit portable-eval validation | No model export API | No model export API | **`jit.trace`, `torch.export`, and ONNX Runtime tested** |
 
 “No” means that the upstream model API does not provide that facility; it does
@@ -131,8 +131,10 @@ model = mednext_base(
 
 Factories are available for Small, Base, Medium, and Large. Stage zero is full
 resolution and stage four is the bottleneck. `CheckpointConfig(stages=None)`
-checkpoints every expansion branch. Checkpointing runs only during gradient
-enabled training and does not change state-dict keys.
+checkpoints every expansion branch; `checkpointing=None` disables checkpointing.
+For YAML configuration, construct `CheckpointConfig(**settings["checkpointing"])`
+from the parsed mapping; `stages` accepts a list. Checkpointing runs only during
+gradient-enabled training and does not change state-dict keys.
 
 Use `CheckpointConfig(style="block")` to checkpoint every complete MedNeXt and
 resampling block. `stages=(...)` can restrict either style to selected resolution
@@ -164,9 +166,9 @@ supported mappings, including eager and `torch.compile` wrapper checkpoints.
 
 ## Select acceleration
 
-Factories use `optimization="auto"` by default. Construction loads a bundled
-profile and installs adaptive wrappers without benchmarking, writing cache files,
-or changing parameters and state-dict keys:
+Factories use `optimization="auto"` by default. Construction loads compact
+bundled policies and installs adaptive wrappers without benchmarking, writing
+cache files, or changing parameters and state-dict keys:
 
 ```python
 from mednext_accel import mednext_base
@@ -174,26 +176,34 @@ from mednext_accel import mednext_base
 model = mednext_base(in_channels=1, out_channels=3)
 ```
 
-Use `optimization="reference"` for standard PyTorch operators only. A profile
-created on the current machine can be supplied as a YAML/JSON path or a
-YAML-compatible mapping:
+Use `optimization="reference"` for standard PyTorch operators only. Supply a
+local **policy YAML** from the profiler when you want measured overrides:
 
 ```python
 model = mednext_base(
     in_channels=1,
     out_channels=3,
-    optimization="~/.cache/mednext_accel/profiles/sm120-local.json",
+    optimization="~/.cache/mednext_accel/profiles/sm120-local.policy.yaml",
 )
 ```
 
-Bundled exact-SM rules take priority over generic NVIDIA rules. Unknown NVIDIA
-architectures use the generic profile with one warning. A user profile is still
-applied when its recorded SM differs from the current GPU, also with one warning;
-this supports intentional cross-machine experiments without silently blocking
-them. SM89 devices automatically load the measured L40S profile; SM120 devices
-load the RTX 5090 profile. Approximate implementations require explicit opt-in.
+Resolution follows **external policy → exact-SM policy → shared NVIDIA policy →
+reference**. A missing rule continues to the next layer; an explicit
+`implementation: reference` stops that phase for a known counterexample.
+Bundled policies cover SM86, SM89, and SM120 and infer useful choices across
+batch sizes. Unknown NVIDIA SMs receive the shared policy. Selection uses the
+execution device, so moving a model between GPUs selects the appropriate layer.
+A user policy targeting another SM still applies with a warning. Correctness
+guards remain active, and approximate implementations require explicit opt-in.
 
-Generate one local profile with no workload flags:
+Checkpointing and batch size remain your choices. Bundled operator policies
+work independently of checkpoint style; local measured overrides retain their
+campaign context. High-batch SM120 devices retain structurally scaled depthwise
+kernels beyond the RTX 5090 measurements. More VRAM alone does not establish
+that every pointwise GEMM is faster. See the
+[policy format and inference assumptions](docs/optimization.md).
+
+Generate a local policy and its evidence with no workload flags:
 
 ```bash
 mednext-accel profile
@@ -219,7 +229,6 @@ workloads:
     in_channels: 1
     out_channels: 3
     dtypes: [bfloat16]
-    phases: [training]
     checkpointing: all-expansion
 ```
 
@@ -235,9 +244,10 @@ is tested first; omit it to discover the upper bound with exponential growth
 and binary refinement. `memory_fraction` determines how much of total GPU VRAM
 a successful model probe may consume before it is treated as infeasible.
 
-The profiler detects the GPU and VRAM, searches for the largest feasible batch
-with isolated subprocesses, profiles kernels only at that selected batch,
-validates candidate forward/backward results, and writes one merged profile. A
+The profiler measures **training only**. It detects the GPU and VRAM, searches
+for the largest feasible batch with isolated subprocesses, profiles kernels
+only at that selected batch, validates candidate forward/backward components,
+and compares the provisional policy's model time and memory. A
 supplied `batch_search.maximum` is tried first and completes the search in one
 model probe when feasible. Without an upper bound, the profiler uses
 exponential growth followed by binary refinement. Rerun with another
@@ -261,13 +271,21 @@ its selected batch. Batch search is also context-specific because checkpointing
 and model shape affect memory, so its diagnostic probes are not globally
 deduplicated or promoted into kernel measurements.
 
-The profiler reports elapsed time and ETA for each fixed-size phase. Hardware,
-driver, Python, PyTorch, CUDA, cuDNN, and Triton versions, along with the final
-execution counts and the complete normalized campaign, are embedded in the
-generated profile. Campaign provenance retains every workload's model family,
-variant, shape, dtype, phase, checkpoint policy, and channel counts. A small
-YAML campaign can restrict variants or input shapes. Model construction and
-first forward never run these benchmarks.
+The profiler reports elapsed time and ETA for each fixed-size phase and prints
+both output paths under `~/.cache/mednext_accel/profiles/` (or
+`$XDG_CACHE_HOME/mednext_accel/profiles/`):
+
+- `smXX-local.policy.yaml`: the stable runtime overlay; use this in `optimization=`.
+- `smXX-local.<timestamp>-<hash>.evidence.json`: immutable environment, campaign,
+  ordered batch probes, component errors, timings, memory, and model comparisons.
+
+The policy references the exact evidence hash. Evidence is written first, then
+the policy is atomically replaced. A rejected model comparison retains all
+kernel evidence and publishes only exact reference overrides for numerical
+failures or measured losers. Its remaining bundled fallthrough was not validated
+by that comparison; the CLI says so. Model comparisons measure performance and
+memory; whole-model numerical equivalence is explicitly `not-measured`.
+Model construction and first forward never run these benchmarks.
 
 Use `fullgraph=True` when the complete training graph is supported. On RTX 5090,
 `mode="default"` is a good general choice, while
@@ -284,7 +302,9 @@ report = model.explain_optimization(
 )
 ```
 
-See [optimization and profiling](docs/optimization.md), the
+See [optimization and profiling](docs/optimization.md) for the YAML schema,
+Python API, and migration from old JSON profiles; the
+[SM86 RTX A6000 evidence](docs/benchmarks/sm86-profile.md), the
 [SM89 L40S evidence](docs/benchmarks/sm89-profile.md), and the
 [SM120 RTX 5090 evidence](docs/benchmarks/sm120-profile.md).
 
@@ -303,10 +323,11 @@ timings, peak allocated/reserved memory, operator table, and Chrome trace.
 Generated output belongs in `artifacts/` and is ignored by Git.
 
 Published RTX 5090 measurements and their limits are retained under
-[`docs/benchmarks/`](docs/benchmarks/). The bundled SM89 default is backed by an
-L40S campaign documented there as well. Results are hardware, software, and
-workload specific; run `mednext-accel profile` when the bundled evidence does
-not match the target model shape, checkpoint policy, or execution environment.
+[`docs/benchmarks/`](docs/benchmarks/), alongside L40S and RTX A6000 policy
+evidence. Those historical model numbers are not a fresh benchmark of every
+policy-v2 combination. Results are hardware, software, and workload specific;
+`auto` supplies inferred defaults immediately, and `mednext-accel profile`
+optionally measures overrides for the target environment.
 
 CPU correctness, export, and wheel-install tests run in CI on Python 3.10–3.12.
 CUDA kernel correctness and performance tests require a local NVIDIA GPU; run

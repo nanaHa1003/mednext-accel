@@ -50,3 +50,13 @@ Spatial dimensions are static. Set `dynamic_batch=True` when one exported model
 must accept multiple batch sizes. ONNX correctness is checked against eager
 FP32 execution with `rtol=1e-4` and `atol=1e-5` because backend convolution
 implementations need not be bit exact.
+
+## Verification scope
+
+Export regression tests use a Small model at 32³ with reduced base channels on
+CPU: direct trace/save/load and strict `torch.export` match eager FP32 exactly;
+ONNX checker and ONNX Runtime use the tolerances above. These checks exercise
+the evaluation path of the default optimized factory and require no custom
+MedNeXt operators in the exported graph. They do not establish training export,
+`jit.script`, every dynamic-shape constraint, or equivalence across all ONNX
+execution providers. The ONNX suite requires the optional export dependencies.

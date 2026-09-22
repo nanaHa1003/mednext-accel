@@ -1,5 +1,10 @@
 # Profiler Deduplication Implementation Plan
 
+> Historical design record. Runtime profile/schema examples and output instructions
+> in this document are superseded by [policy/evidence v2](../specs/2026-09-22-policy-evidence-v2-design.md).
+> Use the current [optimization guide](../../optimization.md) for runnable YAML,
+> CLI commands, and Python APIs.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Reduce automatic profiling from one subprocess per operator shape and checkpoint context to a campaign-wide deduplicated kernel matrix, grouped subprocess execution, and boundary-only whole-model validation with useful counts and ETA.

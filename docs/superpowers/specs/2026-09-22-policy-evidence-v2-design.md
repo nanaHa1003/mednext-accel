@@ -367,6 +367,7 @@ class ProfilingArtifacts:
     policy_path: Path
     evidence_path: Path
 
+
 @dataclass(frozen=True)
 class ProfilingResult:
     policy: OptimizationPolicy

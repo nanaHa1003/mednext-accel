@@ -147,26 +147,30 @@ gave medians of 59.765 ms (3 classes) and 62.698 ms (8 classes), compared with
 96.176 and 97.615 ms for the original Conv3d configuration. Native transpose dX
 and dB remain in place.
 
-The stride-two downsample dX kernel is implemented and numerically validated, but
-its integration is opt-in through `--depthwise-stride2-dx`. Its isolated C32,
+In these historical experiments, stride-two downsample dX was opt-in through
+the benchmark's `--depthwise-stride2-dx` flag. Its isolated C32,
 input-128³ BF16 timing is 0.578 ms versus 1.253 ms for ATen. In the full compiled
 model, however, enabling it raised the 3-class median from about 59.1 to 60.4 ms,
 because splitting native dW/dB from custom dX introduces graph and scheduling
-overhead. The default profiling path therefore leaves downsample dX native until
-that integration boundary is improved.
+overhead. That historical experiment retained native downsample dX. Current
+policy v2 includes a shared downsample-dX rule based on subsequent cross-device
+operator evidence; this earlier model-level counterexample remains relevant
+when evaluating the combined policy. No new whole-model improvement is implied.
 
 ## Per-shape automatic selection
 
 `mednext-accel profile` discovers the shapes created by the chosen MedNeXt
-variant, benchmarks eligible pointwise and depthwise implementations, validates
-their numerical results, and writes the faster choices into one versioned profile. Parameter
-objects and state-dict keys remain unchanged. The selector requires a CUDA model
-and benchmarks the requested positive batch size; downsample dX remains opt-in
-because its isolated gain did not yet translate to a full compiled-model gain.
+variant, finds a maximum feasible batch, and benchmarks eligible pointwise and
+depthwise implementations there. It writes immutable evidence JSON and a
+separate runtime policy YAML. The complete provisional policy is compared
+against the reference model before positive rules are published. Parameter
+objects and state-dict keys remain unchanged. See the current
+[optimization guide](../optimization.md) for shared and per-SM inference,
+negative overrides, and output semantics.
 
 ## Batch-aware RTX 5090 tuning
 
-The production policy keeps the batch-one launches above and selects measured
+The historical batch-aware policy kept the batch-one launches above and selected measured
 dW splits for batches 2, 4, and 6. Pointwise convolution backward showed a
 separate cuDNN algorithm cliff once the batch dimension exceeded one. For the
 measured Base shapes, independent per-sample GEMMs avoid that cliff while
@@ -188,4 +192,6 @@ step-time reduction. Its throughput increased from 13.19 to 14.92 samples/s.
 The batch-six peak-allocation reduction was reproduced in two independent runs;
 it comes from avoiding the native pointwise algorithms and their larger
 temporary storage. These selections remain specific to the measured GPU and
-software stack; unmeasured batches keep native pointwise convolution.
+software stack. Current policy v2 uses bounded pointwise interpolation and
+structurally scaled depthwise launches; unmeasured batches can receive optimized
+choices. See [SM120 policy evidence](sm120-profile.md) for the current bounds.
