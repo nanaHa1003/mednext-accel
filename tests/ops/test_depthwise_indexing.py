@@ -124,3 +124,36 @@ def test_small_tensor_compute_kernels_keep_int32_indexing(name):
     pointers = [line for line in ir.splitlines() if "tt.addptr" in line]
     assert pointers
     assert all(re.search(r"(?:x|[, :] )i32[ >]", line) for line in pointers)
+
+
+@pytest.mark.parametrize("name", ["_partial_dw_kernel", "_partial_transpose_dw_kernel"])
+@pytest.mark.parametrize(
+    "chunk, bits", [(2**31 - 130, 32), (2**31 - 1, 64), (2**31, 64), (2**31 + 1, 64)]
+)
+def test_dw_loop_bounds_and_induction_cross_signed_boundary(name, chunk, bits):
+    constants = dict(N=chunk, C=1, D=1, H=1, W=1, KERNEL_SIZE=3, SPLITS=1, BLOCK=128)
+    if "transpose" in name:
+        constants.update(OD=1, OH=1, OW=1, ACCUMULATE_FP64=False)
+    ir = compile_kernel(name, **constants)
+    assert ir.count("tt.load") == 2, ir
+    loops = [line for line in ir.splitlines() if "scf.for" in line]
+    assert len(loops) == 1, ir
+    loop = re.search(r"scf.for %[\w]+ = (%[\w]+) to (%[\w]+) step (%[\w]+)", loops[0])
+    assert loop, loops[0]
+    # LLVM must receive positive signed bounds and a step/induction of equal width.
+    for symbol, expected in zip(loop.groups(), [0, chunk, 128], strict=True):
+        assert re.search(rf"{re.escape(symbol)} = arith.constant {expected} : i{bits}\b", ir), ir
+    pointers = [line for line in ir.splitlines() if "tt.addptr" in line]
+    assert pointers
+    assert all(re.search(rf"(?:x|[, :] )i{bits}[ >]", line) for line in pointers), pointers
+
+
+@pytest.mark.parametrize("name", ["_partial_dw_kernel", "_partial_transpose_dw_kernel"])
+def test_dw_large_spatial_single_split_keeps_reduction(name):
+    constants = dict(N=2, C=1, D=1024, H=1024, W=1024, KERNEL_SIZE=3, SPLITS=1, BLOCK=128)
+    if "transpose" in name:
+        constants.update(OD=2047, OH=2047, OW=2047, ACCUMULATE_FP64=False)
+    ir = compile_kernel(name, **constants)
+    assert ir.count("tt.load") == 2, ir
+    assert ir.count("scf.for") == 1, ir
+    assert re.search(r"arith.constant 2147483648 : i64\b", ir), ir

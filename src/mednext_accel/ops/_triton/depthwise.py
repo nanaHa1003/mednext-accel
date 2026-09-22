@@ -48,7 +48,12 @@ def _partial_dw_kernel(
     split_end = tl.minimum(split_start + chunk, total)
     positions = split_start + tl.arange(0, BLOCK)
     accumulator = tl.zeros((BLOCK,), tl.float32)
-    for start in range(0, chunk, BLOCK):
+    # A constexpr chunk at 2**31 can still infer a signed i32 loop bound.
+    # Type all range operands, including the final induction step/tail, explicitly.
+    loop_begin = tl.full((), 0, index_dtype)
+    loop_end = tl.full((), chunk, index_dtype)
+    loop_step = tl.full((), BLOCK, index_dtype)
+    for start in range(loop_begin, loop_end, loop_step):
         p = positions + start
         valid_output = p < split_end
         n = p // spatial
@@ -125,7 +130,12 @@ def _partial_transpose_dw_kernel(
     split_end = tl.minimum(split_start + chunk, total)
     positions = split_start + tl.arange(0, BLOCK)
     accumulator = tl.zeros((BLOCK,), tl.float64 if ACCUMULATE_FP64 else tl.float32)
-    for start in range(0, chunk, BLOCK):
+    # A constexpr chunk at 2**31 can still infer a signed i32 loop bound.
+    # Type all range operands, including the final induction step/tail, explicitly.
+    loop_begin = tl.full((), 0, index_dtype)
+    loop_end = tl.full((), chunk, index_dtype)
+    loop_step = tl.full((), BLOCK, index_dtype)
+    for start in range(loop_begin, loop_end, loop_step):
         p = positions + start
         valid_input = p < split_end
         n = p // spatial
