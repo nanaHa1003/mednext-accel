@@ -5,9 +5,12 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field, fields, is_dataclass
+from fractions import Fraction
 from math import isfinite
 from types import MappingProxyType
 from typing import TYPE_CHECKING
+
+from .benchmark import normalize_probe_message
 
 if TYPE_CHECKING:
     from .synthesize import Measurement
@@ -263,7 +266,7 @@ class ModelProbeEvidence:
             seed=result.get("seed", seed),
             step_ms=result.get("step_ms"),
             peak_bytes=result.get("peak_bytes"),
-            message=result.get("message"),
+            message=normalize_probe_message(result.get("status", "missing"), result.get("message")),
             failure_stage=result.get("failure_stage"),
             diagnostics=result.get(
                 "diagnostics", {"loss": result["loss"]} if "loss" in result else {}
@@ -281,6 +284,20 @@ def model_probe_failure(side: str, result: ModelProbeEvidence) -> str | None:
     return None
 
 
+def ratio_at_most(
+    candidate: int | float, reference: int | float, numerator: int, denominator: int
+) -> bool:
+    """Compare an inclusive ratio exactly for the decimal values recorded in JSON.
+
+    Byte counts use integer arithmetic. Float observations use their serialized
+    decimal values, so ratio multiplication introduces neither rounding slack nor
+    false rejection at an inclusive boundary. Callers validate finite inputs first.
+    """
+    if type(candidate) is int and type(reference) is int:
+        return candidate * denominator <= reference * numerator
+    return Fraction(str(candidate)) * denominator <= Fraction(str(reference)) * numerator
+
+
 def model_acceptance(
     objective: str, reference: ModelProbeEvidence, candidate: ModelProbeEvidence, seed: int
 ) -> tuple[bool, bool, str]:
@@ -294,12 +311,14 @@ def model_acceptance(
     performance = memory = False
     if failure is None:
         if objective == "memory":
-            performance = candidate.step_ms <= reference.step_ms * 1.10
+            performance = ratio_at_most(candidate.step_ms, reference.step_ms, 11, 10)
             memory = candidate.peak_bytes < reference.peak_bytes
         else:
             performance = candidate.step_ms < reference.step_ms
-            memory = candidate.peak_bytes <= reference.peak_bytes * (
-                1.25 if objective == "throughput" else 1.15
+            memory = (
+                ratio_at_most(candidate.peak_bytes, reference.peak_bytes, 5, 4)
+                if objective == "throughput"
+                else ratio_at_most(candidate.peak_bytes, reference.peak_bytes, 23, 20)
             )
     reason = failure or (
         "accepted"

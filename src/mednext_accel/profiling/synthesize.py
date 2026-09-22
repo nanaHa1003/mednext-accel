@@ -8,10 +8,12 @@ from math import isfinite
 from typing import Literal
 
 from ..optimization.policy import OptimizationPolicy, parse_policy
+from .benchmark import normalize_probe_message
 from .evidence import (
     OBJECTIVES,
     freeze,
     primitive,
+    ratio_at_most,
     record_fields,
     require_bool,
     require_int,
@@ -204,7 +206,9 @@ def measurement_from_result(
         candidate_peak_bytes=result.get("candidate_peak_bytes", 0),
         parameters=key.parameters,
         probe_status=result.get("status", "missing"),
-        probe_message=result.get("message"),
+        probe_message=normalize_probe_message(
+            result.get("status", "missing"), result.get("message")
+        ),
         kernel_valid=result.get("valid"),
         failure_stage=result.get("failure_stage"),
         seed=result.get("seed"),
@@ -239,13 +243,11 @@ def candidate_wins(item: Measurement, objective: Objective) -> bool:
     if objective == "throughput":
         return item.candidate_ms < item.reference_ms
     if objective == "memory":
-        return (
-            item.candidate_peak_bytes < item.reference_peak_bytes
-            and item.candidate_ms <= item.reference_ms * 1.10
+        return item.candidate_peak_bytes < item.reference_peak_bytes and ratio_at_most(
+            item.candidate_ms, item.reference_ms, 11, 10
         )
-    return (
-        item.candidate_ms <= item.reference_ms * 0.97
-        and item.candidate_peak_bytes <= item.reference_peak_bytes * 1.15
+    return ratio_at_most(item.candidate_ms, item.reference_ms, 97, 100) and ratio_at_most(
+        item.candidate_peak_bytes, item.reference_peak_bytes, 23, 20
     )
 
 

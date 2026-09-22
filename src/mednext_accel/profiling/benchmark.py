@@ -10,11 +10,27 @@ from types import MappingProxyType
 from typing import Any
 
 
+def normalize_probe_message(status: str, message: str | None) -> str | None:
+    """Give unsuccessful child results a diagnostic without coercing malformed types."""
+    if not isinstance(status, str) or not status:
+        raise ValueError("probe status must be a nonempty string")
+    if message is not None and not isinstance(message, str):
+        raise ValueError("probe message must be a string or null")
+    if message is not None and message.strip():
+        return message
+    if status != "ok":
+        return f"probe reported {status} without a diagnostic"
+    return None
+
+
 @dataclass(frozen=True, slots=True)
 class SubprocessResult:
     status: str
     payload: dict[str, Any]
-    message: str = ""
+    message: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "message", normalize_probe_message(self.status, self.message))
 
 
 def run_json_subprocess(
@@ -33,9 +49,16 @@ def run_json_subprocess(
         )
     except subprocess.TimeoutExpired:
         return SubprocessResult("timeout", {}, f"probe exceeded {timeout:g} seconds")
+    except OSError as error:
+        diagnostic = str(error).strip() or "could not start probe"
+        return SubprocessResult("infrastructure_error", {}, f"{type(error).__name__}: {diagnostic}")
     if completed.returncode != 0:
         return SubprocessResult(
-            "infrastructure_error", {}, completed.stderr.strip() or completed.stdout.strip()
+            "infrastructure_error",
+            {},
+            completed.stderr.strip()
+            or completed.stdout.strip()
+            or f"probe exited with status {completed.returncode} without output",
         )
     lines = [line for line in completed.stdout.splitlines() if line.strip()]
     if not lines:
@@ -46,9 +69,9 @@ def run_json_subprocess(
         return SubprocessResult("infrastructure_error", {}, f"invalid probe JSON: {error}")
     if not isinstance(payload, dict):
         return SubprocessResult("infrastructure_error", {}, "probe JSON must be an object")
-    status = str(payload.get("status", "ok"))
-    return SubprocessResult(
-        status,
-        dict(MappingProxyType(payload)),
-        str(payload.get("message", "")),
-    )
+    status = payload.get("status", "ok")
+    try:
+        message = normalize_probe_message(status, payload.get("message"))
+    except ValueError as error:
+        return SubprocessResult("infrastructure_error", {}, f"invalid probe JSON: {error}")
+    return SubprocessResult(status, dict(MappingProxyType(payload)), message)
