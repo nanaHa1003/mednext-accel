@@ -471,6 +471,11 @@ def test_depthwise_intervals_use_auto_recipes_and_stop_at_observed_barriers(
             spatial_shape=(16,) * 3,
             in_channels=64,
             out_channels=64,
+            parameters=(
+                (("dx_block", 128),)
+                if phase == "backward_input"
+                else (("dw_block", 512), ("dw_splits", 1))
+            ),
         )
         for batch in range(1, 6)
     ]
@@ -569,6 +574,7 @@ def test_single_depthwise_observation_does_not_create_unbounded_positive_range()
         family="depthwise_conv3d",
         phase="backward_input",
         implementation="triton_depthwise_dx",
+        parameters=(("dx_block", 128),),
         kernel_size=3,
         in_channels=64,
         out_channels=64,
@@ -584,6 +590,7 @@ def test_conflicting_depthwise_work_projection_keeps_valid_context_exact():
         family="depthwise_conv3d",
         phase="backward_input",
         implementation="triton_depthwise_dx",
+        parameters=(("dx_block", 128),),
         kernel_size=3,
         in_channels=64,
         out_channels=64,

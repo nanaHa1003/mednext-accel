@@ -163,3 +163,78 @@ def test_suppressed_alternative_preserves_tombstone_for_rejected_inherited_recip
     else:
         assert selected.implementation == "reference"
     assert resolve.resolve(op, replace(ctx, batch_size=2), "backward_weight").policy != "local"
+
+
+@pytest.mark.parametrize(
+    "direction,family,implementation,rejected_parameters",
+    [
+        (
+            "regular",
+            "depthwise_conv3d",
+            "triton_split_dw",
+            (("dw_block", 512), ("dw_splits", 1)),
+        ),
+        (
+            "transpose",
+            "depthwise_conv_transpose3d",
+            "triton_transpose_split_dw",
+            (("dw_block", 512), ("dw_splits", 2)),
+        ),
+    ],
+)
+@pytest.mark.parametrize("with_rejected_recipe", [False, True])
+def test_omitted_parameter_winner_preserves_measured_launch_without_rejected_auto_recipe(
+    direction, family, implementation, rejected_parameters, with_rejected_recipe
+):
+    winner = measurement(
+        family=family,
+        direction=direction,
+        phase="backward_weight",
+        implementation=implementation,
+        batch=2,
+        spatial_shape=(16,) * 3,
+        in_channels=64,
+        out_channels=64,
+        kernel_size=3,
+        parameters=(),
+    )
+    items = [winner]
+    if with_rejected_recipe:
+        items.append(replace(winner, parameters=rejected_parameters, kernel_valid=False))
+    policy = synthesize_profile(items, name="omitted-launch", sm=(8, 9), objective="balanced")
+    resolve = PolicyRegistry(external=policy_to_primitive(policy)).resolver(triton_available=True)
+    descriptor = OperatorDescriptor(
+        family,
+        direction,
+        64,
+        64,
+        (3,) * 3,
+        (2 if direction == "transpose" else 1,) * 3,
+        (1,) * 3,
+        (1,) * 3,
+        64,
+    )
+    context = ExecutionContext(
+        "training",
+        "cuda",
+        (8, 9),
+        48 * 1024**3,
+        "bfloat16",
+        2,
+        (16,) * 3,
+        "mednext_v1",
+        "base",
+        "none",
+    )
+    selected = resolve.resolve(descriptor, context, "backward_weight")
+    assert selected.implementation == implementation
+    assert selected.parameters == {}  # Preserve the adaptive wrapper's omitted-parameter path.
+    assert selected.parameters != dict(rejected_parameters)
+    rule = policy.rules[0]
+    assert rule.when["batch"].minimum == rule.when["batch"].maximum == 2
+    assert rule.when["channels"] == (64, 64)
+    assert rule.when["spatial_shape"] == (16, 16, 16)
+    assert "parameters" not in policy_to_primitive(policy)["rules"][0]["use"]["backward_weight"]
+    assert resolve.resolve(
+        descriptor, replace(context, batch_size=3), "backward_weight"
+    ).policy != ("omitted-launch")

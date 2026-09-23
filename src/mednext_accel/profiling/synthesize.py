@@ -329,7 +329,10 @@ def _exact_conditions(item: Measurement) -> dict[str, object]:
 def _uses_default_recipe(item: Measurement, sm: tuple[int, int]) -> bool:
     """Keep measured launch exceptions exact instead of restoring a failed recipe."""
     if not item.parameters:
-        return True
+        # The integrated path omits the selection's parameters in this case.
+        # Adaptive defaults need not equal the recipe (notably for dW), so only
+        # an exact selection with the same omission preserves the measurement.
+        return False
     stride = 1 if item.direction == "regular" else 2
     descriptor = OperatorDescriptor(
         item.family,
