@@ -15,7 +15,7 @@ from mednext_accel import (
     mednext_medium,
     mednext_small,
 )
-from mednext_accel.ops.adaptive import AdaptivePointwise3d
+from mednext_accel.ops.adaptive import AdaptiveDepthwise3d, AdaptivePointwise3d
 
 
 @pytest.mark.parametrize(
@@ -190,7 +190,8 @@ def test_explain_optimization_reports_batch_three_gemm(monkeypatch) -> None:
         input_shape=(3, 1, 128, 128, 128), dtype="bfloat16", device="cuda:0"
     )
     assert any(
-        decision.implementation == "pointwise_gemm_per_sample" for decision in report.decisions
+        decision.implementation == "pointwise_gemm_per_sample" and decision.disposition == "custom"
+        for decision in report.decisions
     )
     assert any(
         decision.descriptor.in_channels == 32
@@ -215,3 +216,60 @@ def test_optimization_report_uses_campaign_checkpoint_names(config, expected) ->
         input_shape=(1, 1, 32, 32, 32), dtype="bfloat16", device="cpu"
     )
     assert report.context.checkpointing == expected
+
+
+@pytest.mark.parametrize("optimization", ["auto", "reference"])
+@pytest.mark.parametrize("spatial_dims", [2, 3])
+def test_report_enumerates_all_convolutions_with_truthful_dispositions(optimization, spatial_dims):
+    model = mednext_small(
+        in_channels=1,
+        out_channels=3,
+        base_channels=2,
+        spatial_dims=spatial_dims,
+        optimization=optimization,
+        deep_supervision=True,
+    )
+    report = model.explain_optimization(
+        input_shape=(2, 1, *((32, 48) if spatial_dims == 2 else (32, 48, 64))),
+        dtype="bfloat16",
+        device="cpu",
+    )
+    operators = {
+        name: module
+        for name, module in model.named_modules()
+        if isinstance(
+            module,
+            (
+                nn.Conv2d,
+                nn.Conv3d,
+                nn.ConvTranspose2d,
+                nn.ConvTranspose3d,
+                AdaptiveDepthwise3d,
+                AdaptivePointwise3d,
+            ),
+        )
+    }
+    assert {d.descriptor.role for d in report.decisions} == set(operators)
+    assert len({(d.descriptor.role, d.phase) for d in report.decisions}) == len(report.decisions)
+    for decision in report.decisions:
+        module = operators[decision.descriptor.role]
+        expected = (
+            "native"
+            if isinstance(module, (AdaptiveDepthwise3d, AdaptivePointwise3d))
+            else "unwrapped"
+        )
+        assert decision.disposition == expected
+        assert decision.implementation == "reference"
+        assert len(decision.descriptor.kernel_size) == spatial_dims
+    head = next(d for d in report.decisions if d.descriptor.role == "head.conv")
+    assert head.disposition == "unwrapped"
+    assert head.descriptor.family == f"conv_transpose{spatial_dims}d"
+    assert head.descriptor.direction == "transpose"
+    assert report.context.spatial_volume == (1536 if spatial_dims == 2 else 98304)
+
+
+@pytest.mark.parametrize("spatial_dims,input_shape", [(2, (1, 1, 32, 32, 32)), (3, (1, 1, 32, 32))])
+def test_report_rejects_input_rank_inconsistent_with_model(spatial_dims, input_shape):
+    model = mednext_small(in_channels=1, out_channels=3, base_channels=2, spatial_dims=spatial_dims)
+    with pytest.raises(ValueError, match="input_shape"):
+        model.explain_optimization(input_shape=input_shape, dtype="float32", device="cpu")

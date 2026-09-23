@@ -28,7 +28,7 @@ def execution_context_for_shape(
     model_context: ModelOptimizationContext,
     *,
     batch_size: int,
-    spatial_shape: tuple[int, int, int],
+    spatial_shape: tuple[int, ...],
     dtype: torch.dtype | str,
     device_type: str,
     sm: tuple[int, int] | None,
@@ -78,20 +78,25 @@ def _context_from_tensor(
 
 
 def _conv_descriptor(
-    conv: nn.Conv3d | nn.ConvTranspose3d, *, role: str | None
+    conv: nn.Conv2d | nn.Conv3d | nn.ConvTranspose2d | nn.ConvTranspose3d, *, role: str | None
 ) -> OperatorDescriptor:
-    transpose = isinstance(conv, nn.ConvTranspose3d)
+    transpose = isinstance(conv, (nn.ConvTranspose2d, nn.ConvTranspose3d))
     depthwise = conv.groups == conv.in_channels == conv.out_channels
+    dimensions = len(conv.kernel_size)
     family = (
-        "depthwise_conv_transpose3d"
+        "depthwise_conv_transpose"
         if transpose and depthwise
-        else "depthwise_conv3d"
+        else "conv_transpose"
+        if transpose
+        else "depthwise_conv"
         if depthwise
-        else "pointwise_conv3d"
+        else "pointwise_conv"
+        if conv.kernel_size == (1,) * dimensions and conv.groups == 1
+        else "conv"
     )
     direction = "transpose" if transpose else ("downsample" if conv.stride[0] == 2 else "regular")
     return OperatorDescriptor(
-        family=family,
+        family=f"{family}{dimensions}d",
         direction=direction,
         in_channels=conv.in_channels,
         out_channels=conv.out_channels,

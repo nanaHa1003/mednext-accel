@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from importlib.util import find_spec
 from types import MappingProxyType
+from typing import Literal
 
 import torch
 
@@ -28,6 +29,7 @@ class PolicyDecision:
     warning: str | None = None
     guard_reason: str | None = None
     execution_guards: tuple[str, ...] = ()
+    disposition: Literal["custom", "native", "unwrapped"] = "native"
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "parameters", MappingProxyType(dict(self.parameters)))
@@ -168,13 +170,22 @@ class PolicyResolver:
                 guard_reason="requires CUDA with a known NVIDIA SM",
             )
         warning = self.warn_for_sm(context.sm)
+        guarded = None
         for policy in self.context_layers(context):
             for rule in policy.rules:
                 selection = rule.use.get(phase)
                 if selection is not None and _matches(rule, descriptor, context):
-                    return self._decision(
+                    decision = self._decision(
                         policy, rule, selection, descriptor, context, phase, warning
                     )
+                    if selection.implementation == "reference" or decision.guard_reason is None:
+                        return decision
+                    if guarded is None:
+                        guarded = decision
+                    # The first matching rule is authoritative within this layer.
+                    break
+        if guarded is not None:
+            return guarded
         return PolicyDecision(
             descriptor, phase, "reference", {}, "reference", "fallback", "guard", warning
         )
@@ -257,6 +268,7 @@ class PolicyResolver:
             rule.confidence,
             warning,
             execution_guards=execution_guards,
+            disposition="native" if selection.implementation == "reference" else "custom",
         )
 
     def resolve_all(

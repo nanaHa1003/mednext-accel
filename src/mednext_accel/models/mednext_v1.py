@@ -17,10 +17,12 @@ from ..ops.adaptive import (
     AdaptiveDepthwise3d,
     AdaptivePointwise3d,
     ModelOptimizationContext,
+    _conv_descriptor,
     execution_context_for_shape,
     install_adaptive_operators,
 )
 from ..optimization.policies import PolicyRegistry
+from ..optimization.policy_resolver import PolicyDecision
 from ..optimization.report import OptimizationReport
 from .blocks import MedNeXtBlock, MedNeXtDownBlock, MedNeXtUpBlock, OutputHead
 from .config import MedNeXtV1Config, get_mednext_v1_config
@@ -223,12 +225,18 @@ class MedNeXtV1(nn.Module):
     def explain_optimization(
         self,
         *,
-        input_shape: tuple[int, int, int, int, int],
+        input_shape: tuple[int, ...],
         dtype: str | torch.dtype,
         device: str | torch.device,
     ) -> OptimizationReport:
         """Resolve and report implementations without executing the model."""
 
+        expected_rank = self.config.spatial_dims + 2
+        if len(input_shape) != expected_rank:
+            raise ValueError(
+                f"input_shape must have rank {expected_rank} "
+                f"for a {self.config.spatial_dims}D model"
+            )
         resolver = self.__dict__.get("_optimization_resolver")
         model_context = ModelOptimizationContext(
             "mednext_v1",
@@ -252,15 +260,27 @@ class MedNeXtV1(nn.Module):
             total_vram_bytes=total_vram,
             training=self.training,
         )
-        if resolver is None:
-            return OptimizationReport(("reference",), context, ())
         decisions = []
-        for module in self.modules():
+        for role, module in self.named_modules():
+            if isinstance(module, (nn.Conv2d, nn.Conv3d, nn.ConvTranspose2d, nn.ConvTranspose3d)):
+                decisions.append(
+                    PolicyDecision(
+                        _conv_descriptor(module, role=role),
+                        context.phase,
+                        "reference",
+                        {},
+                        "reference",
+                        "unwrapped",
+                        "guard",
+                        disposition="unwrapped",
+                    )
+                )
+                continue
+            if not isinstance(module, (AdaptivePointwise3d, AdaptiveDepthwise3d)):
+                continue
             module_context = replace(
                 context,
-                spatial_shape=_spatial_shape_for_role(module.descriptor.role, context.spatial_shape)
-                if isinstance(module, (AdaptivePointwise3d, AdaptiveDepthwise3d))
-                else context.spatial_shape,
+                spatial_shape=_spatial_shape_for_role(role, context.spatial_shape),
             )
             if isinstance(module, AdaptivePointwise3d):
                 decisions.append(resolver.resolve(module.descriptor, module_context, context.phase))
@@ -275,7 +295,9 @@ class MedNeXtV1(nn.Module):
             )
         )
         return OptimizationReport(
-            tuple(policy.name for policy in resolver.context_layers(context)) or ("reference",),
+            (tuple(policy.name for policy in resolver.context_layers(context)) or ("reference",))
+            if resolver is not None
+            else ("reference",),
             context,
             tuple(decisions),
             report_warnings,
@@ -291,9 +313,7 @@ def _checkpoint_name(config: CheckpointConfig | None) -> str:
     return f"{config.style}:{stages}"
 
 
-def _spatial_shape_for_role(
-    role: str | None, input_spatial: tuple[int, int, int]
-) -> tuple[int, int, int]:
+def _spatial_shape_for_role(role: str | None, input_spatial: tuple[int, ...]) -> tuple[int, ...]:
     if role is None or role == "stem" or role.startswith("head"):
         return input_spatial
     parts = role.split(".")

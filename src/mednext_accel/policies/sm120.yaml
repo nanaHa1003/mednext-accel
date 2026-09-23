@@ -22,10 +22,6 @@ rules:
     when: {family: depthwise_conv3d, direction: regular, kernel_size: [3, 3, 3], batch: 6, spatial_shape: [32, 32, 32], channels: [128, 128]}
     use: {backward_weight: {implementation: triton_split_dw, parameters: {dw_splits: 8}}}
     confidence: measured-exact-context
-  - id: pw-common-1
-    when: {family: pointwise_conv3d, direction: regular, spatial_shape: [128, 128, 128], channels: [32, 3], batch: {min: 2, max: 6}}
-    use: {training: {implementation: pointwise_gemm_per_sample}}
-    confidence: interpolated-bounded
   - id: pw-common-2
     when: {family: pointwise_conv3d, direction: regular, spatial_shape: [64, 64, 64], channels: [32, 96], batch: {min: 2, max: 6}}
     use: {training: {implementation: pointwise_gemm_per_sample}}

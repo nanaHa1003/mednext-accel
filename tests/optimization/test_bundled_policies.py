@@ -125,6 +125,14 @@ def test_sm120_pointwise_is_bounded_and_does_not_spill_into_shared():
             assert (decision.implementation != "reference") == (sm == (12, 0) and batch == 3)
 
 
+@pytest.mark.parametrize("sm", [(8, 6), (8, 9), (12, 0), (9, 0)])
+def test_bundled_policies_do_not_claim_acceleration_for_unreachable_pointwise_head(sm):
+    resolver = registry()
+    for batch in range(2, 7):
+        decision = resolver.resolve(op(32, 3, pointwise=True), context(batch, 128, sm), "training")
+        assert decision.implementation == "reference"
+
+
 @pytest.mark.parametrize(("channels", "output", "size"), [(64, 32, 128), (128, 384, 63)])
 def test_sm89_new_pointwise_winners_are_exact_context(channels, output, size):
     resolver = registry()

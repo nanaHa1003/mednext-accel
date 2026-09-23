@@ -8,6 +8,8 @@ from .policy_resolver import PolicyDecision
 
 @dataclass(frozen=True, slots=True)
 class OptimizationReport:
+    """Decisions for wrapped and unwrapped convolutions, including native execution."""
+
     policies: tuple[str, ...]
     context: ExecutionContext
     decisions: tuple[PolicyDecision, ...]

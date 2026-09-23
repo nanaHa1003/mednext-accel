@@ -96,8 +96,10 @@ def test_layers_choose_external_then_exact_sm_then_shared_then_reference():
     assert selected.rule == "dw"
     assert selected.confidence == "validated-cross-sm"
     assert selected.parameters == {"dw_splits": 9, "dw_block": 512}
+    assert selected.disposition == "custom"
     fallback = subject.resolve(descriptor(), context(), "forward")
     assert fallback.implementation == fallback.policy == "reference"
+    assert fallback.disposition == "native"
 
 
 def test_tombstone_stops_lower_layers_and_missing_phase_falls_through():
@@ -129,6 +131,65 @@ def test_first_matching_rule_with_requested_phase_wins():
     )
     assert result.rule == "first"
     assert result.parameters == {"dw_splits": 2, "dw_block": 512}
+
+
+@pytest.mark.parametrize("sm", [(8, 9), None])
+def test_guarded_external_choice_falls_through_to_valid_lower_layer(sm):
+    external = policy("external", [rule("guarded", implementation="triton_transpose_split_dw")])
+    lower = policy("lower", [rule("valid")], sm=sm)
+    selected = resolver([lower], external=external).resolve(
+        descriptor(), context(), "backward_weight"
+    )
+    assert (selected.policy, selected.rule, selected.implementation) == (
+        "lower",
+        "valid",
+        "triton_split_dw",
+    )
+    assert selected.guard_reason is None
+
+
+def test_reference_tombstone_after_guard_stops_resolution():
+    external = policy("external", [rule(implementation="triton_transpose_split_dw")])
+    exact = policy("exact", [rule("stop", implementation="reference", parameters=None)], sm=(8, 9))
+    shared = policy("shared", [rule()])
+    selected = resolver([shared, exact], external=external).resolve(
+        descriptor(), context(), "backward_weight"
+    )
+    assert (selected.policy, selected.rule, selected.implementation) == (
+        "exact",
+        "stop",
+        "reference",
+    )
+    assert selected.guard_reason is None
+
+
+def test_guard_fallthrough_never_searches_later_rules_in_same_policy():
+    external = policy(
+        "external",
+        [
+            rule("guarded", implementation="triton_transpose_split_dw"),
+            rule("must-not-select"),
+        ],
+    )
+    selected = resolver([policy("shared", [rule("valid")])], external=external).resolve(
+        descriptor(), context(), "backward_weight"
+    )
+    assert (selected.policy, selected.rule) == ("shared", "valid")
+
+
+def test_all_guarded_layers_preserve_highest_priority_diagnostic():
+    external = policy("external", [rule("first-guard", implementation="triton_transpose_split_dw")])
+    lower = policy("lower", [rule()], sm=(8, 9))
+    selected = resolver([lower], external=external, triton_available=False).resolve(
+        descriptor(), context(), "backward_weight"
+    )
+    assert (selected.policy, selected.rule, selected.implementation, selected.confidence) == (
+        "external",
+        "first-guard",
+        "reference",
+        "guard",
+    )
+    assert selected.guard_reason == "implementation does not support this operator family"
 
 
 def test_execution_sm_is_not_frozen_at_construction_and_unknown_sm_gets_shared():
@@ -208,6 +269,7 @@ def test_static_context_guards_are_visible_in_decisions(changes, reason):
     )
     assert result.implementation == "reference"
     assert result.confidence == "guard"
+    assert result.disposition == "native"
     assert reason in result.guard_reason
 
 
