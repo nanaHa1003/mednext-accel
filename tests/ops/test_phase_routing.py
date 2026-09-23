@@ -69,6 +69,48 @@ class ObserveConvolution(TorchDispatchMode):
         return func(*args, **(kwargs or {}))
 
 
+@pytest.mark.parametrize("layout", ["contiguous", "channels_last_3d", "strided", "unbatched"])
+def test_pointwise_gemm_requires_batched_contiguous_ncdhw(layout):
+    torch.manual_seed(47)
+    reference = nn.Conv3d(4, 8, 1, device="cuda")
+    policy = parse_policy(
+        {
+            "version": 2,
+            "kind": "mednext-accel-policy",
+            "name": "pointwise-layout",
+            "target": {"vendor": "nvidia"},
+            "rules": [
+                {
+                    "id": "pointwise",
+                    "when": {"family": "pointwise_conv3d"},
+                    "use": {"training": {"implementation": "pointwise_gemm_per_sample"}},
+                    "confidence": "measured-exact-context",
+                }
+            ],
+        }
+    )
+    candidate = AdaptivePointwise3d(
+        copy.deepcopy(reference),
+        PolicyResolver(external=policy),
+        ModelOptimizationContext("mednext_v1", "base", "none"),
+    )
+    sample = torch.randn(2, 4, 3, 4, 5, device="cuda", requires_grad=True)
+    if layout == "channels_last_3d":
+        sample = sample.contiguous(memory_format=torch.channels_last_3d)
+    elif layout == "strided":
+        sample = sample.transpose(-1, -2)
+    elif layout == "unbatched":
+        sample = sample[0]
+    with torch.autocast("cuda", dtype=torch.bfloat16):
+        expected = reference(sample)
+        with ObserveConvolution() as observed:
+            actual = candidate(sample)
+    torch.testing.assert_close(actual, expected, rtol=0.02, atol=0.02)
+    assert actual.stride() == expected.stride()
+    assert ("aten::addmm" in observed.operations) == (layout == "contiguous")
+    assert ("aten::convolution" in observed.operations) == (layout != "contiguous")
+
+
 @pytest.mark.parametrize(("dx", "dw"), [(True, True), (True, False), (False, True), (False, False)])
 @pytest.mark.parametrize("autocast", [False, True])
 def test_regular_decisions_execute_independently_with_native_phase_masks(dx, dw, autocast):

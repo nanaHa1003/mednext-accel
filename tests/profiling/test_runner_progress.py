@@ -215,6 +215,7 @@ def _prepare_campaign(monkeypatch, *, batches=(2,), depthwise=()):
 def _winning_result():
     return {
         "benchmark_kind": "integrated_operator",
+        "gradient_mask": (True, True, True),
         "memory_measured": True,
         "status": "ok",
         "valid": True,

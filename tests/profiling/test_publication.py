@@ -37,6 +37,7 @@ def records():
         100,
         True,
         benchmark_kind="integrated_operator",
+        gradient_mask=(True, True, True),
         memory_measured=True,
     )
     evidence = ProfilingEvidence(

@@ -27,6 +27,7 @@ def measured(batch: int, reference_ms: float, candidate_ms: float) -> Measuremen
         candidate_peak_bytes=100,
         kernel_valid=True,
         benchmark_kind="integrated_operator",
+        gradient_mask=(True, True, True),
         memory_measured=True,
     )
 
@@ -199,6 +200,7 @@ def test_measurement_serializes_probe_and_numerical_diagnostics():
         "status": "ok",
         "message": "completed",
         "benchmark_kind": "integrated_operator",
+        "gradient_mask": (True, True, True),
         "valid": False,
         "validator": "component-relative-l2-v1",
         "validation_metrics": metrics,
@@ -345,6 +347,80 @@ def test_raw_diagnostics_never_create_rules_or_reject_integrated_candidates(
     mixed = synthesize_profile([raw, integrated], **options)
     expected = synthesize_profile([integrated], **options)
     assert mixed == expected
+
+
+@pytest.mark.parametrize("objective", ["balanced", "throughput", "memory"])
+@pytest.mark.parametrize("include_winners", [True, False])
+@pytest.mark.parametrize(
+    "phase,mask",
+    [
+        ("backward_input", (False, True, True)),
+        ("backward_weight", (True, False, True)),
+        ("backward_bias", (True, True, False)),
+        ("training", (False, True, True)),
+        ("training", (True, False, True)),
+        ("training", (True, True, False)),
+        ("training", None),
+        ("backward_input", None),
+    ],
+)
+@pytest.mark.parametrize(
+    "updates",
+    [
+        {"candidate_ms": 1.0, "candidate_peak_bytes": 1},
+        {"candidate_ms": 12.0},
+        {"kernel_valid": False},
+    ],
+)
+def test_unexercised_phases_are_diagnostic_and_cannot_reject_active_candidates(
+    objective, include_winners, phase, mask, updates
+):
+    active = phase_measurement(phase, (True, True, True))
+    inactive = replace(active, gradient_mask=mask, **updates)
+    assert not candidate_wins(inactive, objective)
+    options = dict(
+        name="inactive-phase", sm=(12, 0), objective=objective, include_winners=include_winners
+    )
+    assert synthesize_profile([inactive], **options).rules == ()
+    assert synthesize_profile([inactive, active], **options) == synthesize_profile(
+        [active], **options
+    )
+    assert Measurement(**inactive.to_primitive()) == inactive
+
+
+@pytest.mark.parametrize(
+    "phase,mask",
+    [
+        ("backward_input", (True, False, False)),
+        ("backward_weight", (False, True, False)),
+        ("backward_bias", (False, False, True)),
+        ("training", (True, True, True)),
+    ],
+)
+def test_phase_evidence_needs_only_its_requested_gradient(phase, mask):
+    item = phase_measurement(phase, mask)
+    assert candidate_wins(item, "balanced")
+    profile = synthesize_profile([item], name="active-phase", sm=(12, 0), objective="balanced")
+    assert profile.rules[0].use[phase].implementation == item.implementation
+
+
+def phase_measurement(phase, mask):
+    item = replace(
+        measured(2, 10.0, 7.0), phase=phase, gradient_mask=mask, candidate_peak_bytes=90
+    )
+    if phase == "training":
+        return item
+    return replace(
+        item,
+        family="depthwise_conv3d",
+        kernel_size=3,
+        out_channels=32,
+        implementation={
+            "backward_input": "triton_depthwise_dx",
+            "backward_weight": "triton_split_dw",
+            "backward_bias": "reference",
+        }[phase],
+    )
 
 
 def test_legacy_winner_deserializes_as_diagnostic_and_cannot_synthesize_rules():

@@ -27,6 +27,7 @@ def measured() -> Measurement:
         candidate_peak_bytes=100,
         kernel_valid=True,
         benchmark_kind="integrated_operator",
+        gradient_mask=(True, True, True),
         memory_measured=True,
     )
 

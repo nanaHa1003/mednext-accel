@@ -1,10 +1,12 @@
 import weakref
+from dataclasses import asdict
 
 import pytest
 import torch
 from torch.utils._python_dispatch import TorchDispatchMode
 
 from mednext_accel.profiling import runner, validation
+from mednext_accel.profiling.campaign import load_campaign
 
 
 @pytest.fixture
@@ -235,6 +237,47 @@ def test_model_failure_stages_are_preserved(cpu_probe, monkeypatch, stage):
         "model.initialization" if stage == "initialization" else f"model.timing.measurement.{stage}"
     )
     assert result["failure_stage"] == expected
+
+
+def test_eager_campaign_model_probe_completes_a_training_step(cpu_probe, monkeypatch):
+    class Tiny(torch.nn.Conv3d):
+        def cuda(self):
+            return self
+
+    model = Tiny(1, 2, 1)
+    initial_weight = model.weight.detach().clone()
+    campaign = load_campaign(
+        {
+            "compile_mode": "eager",
+            "workloads": [
+                {
+                    "variant": "small",
+                    "checkpointing": "none",
+                    "in_channels": 1,
+                    "out_channels": 2,
+                    "spatial": [4, 4, 4],
+                }
+            ],
+        }
+    )
+
+    def timed(function, *, on_stage, **kwargs):
+        on_stage("measurement")
+        function()
+        return 1.0, 64
+
+    monkeypatch.setattr(runner, "_factory", lambda variant: lambda **kwargs: model)
+    monkeypatch.setattr(runner, "_timed", timed)
+    result = runner._model_probe(
+        {
+            "batch": 1,
+            "workload": asdict(campaign.workloads[0]),
+            "compile_mode": campaign.compile_mode,
+        }
+    )
+    assert result["status"] == "ok", result
+    assert result["diagnostics"]["loss"] > 0
+    assert not torch.equal(model.weight, initial_weight)
 
 
 def test_child_failure_payload_survives_subprocess_ingestion(monkeypatch):

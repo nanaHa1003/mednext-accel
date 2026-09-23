@@ -190,7 +190,12 @@ class AdaptivePointwise3d(_AdaptiveConv3d):
     def forward(self, x: Tensor) -> Tensor:
         context = _context_from_tensor(x, self.model_context, training=self.training)
         decision = self.resolver.resolve(self.descriptor, context, context.phase)
-        if decision.implementation == "pointwise_gemm_per_sample" and torch.is_grad_enabled():
+        if (
+            decision.implementation == "pointwise_gemm_per_sample"
+            and torch.is_grad_enabled()
+            and x.ndim == 5
+            and x.is_contiguous()
+        ):
             return self._gemm(x)
         return F.conv3d(x, self.weight, self.bias)
 

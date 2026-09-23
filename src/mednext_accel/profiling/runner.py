@@ -165,9 +165,10 @@ def _model_probe(payload: dict[str, object], probe: _ProbeRecord) -> dict[str, o
         .cuda()
         .train()
     )
-    probe.stage = "model.compile"
     compile_mode = str(payload.get("compile_mode", "default"))
-    model.compile(mode=compile_mode, fullgraph=True)
+    if compile_mode != "eager":
+        probe.stage = "model.compile"
+        model.compile(mode=compile_mode, fullgraph=True)
     batch = int(payload["batch"])
     spatial = tuple(int(item) for item in workload["spatial"])
     probe.stage = "model.allocation.input"

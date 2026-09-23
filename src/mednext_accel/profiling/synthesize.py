@@ -259,11 +259,21 @@ def measurement_from_result(
     return replace(item, objective=objective, objective_winner=candidate_wins(item, objective))
 
 
+def _dispatch_evidence(item: Measurement) -> bool:
+    """Require integrated measurements that exercised the selected phase."""
+    if item.benchmark_kind != "integrated_operator" or item.gradient_mask is None:
+        return False
+    if item.phase == "training":
+        return all(item.gradient_mask)
+    index = {"backward_input": 0, "backward_weight": 1, "backward_bias": 2}.get(item.phase)
+    return index is None or item.gradient_mask[index]
+
+
 def candidate_wins(item: Measurement, objective: Objective) -> bool:
     """Return whether a validated candidate satisfies the profile objective."""
     if objective not in ("balanced", "throughput", "memory"):
         raise ValueError(f"unknown profiling objective {objective!r}")
-    if item.benchmark_kind != "integrated_operator":
+    if not _dispatch_evidence(item):
         return False
     if item.kernel_valid is not True or item.probe_status != "ok":
         return False
@@ -421,7 +431,7 @@ def synthesize_profile(
     """
     by_match: dict[tuple[object, ...], list[Measurement]] = {}
     for item in measurements:
-        if item.benchmark_kind == "integrated_operator":
+        if _dispatch_evidence(item):
             by_match.setdefault(measurement_identity(item), []).append(item)
     negatives, exceptions, groups = [], [], {}
     for _identity, items in sorted(by_match.items()):

@@ -28,6 +28,7 @@ def measurement(**updates):
         100,
         True,
         benchmark_kind="integrated_operator",
+        gradient_mask=(True, True, True),
         memory_measured=True,
         workload={"model_family": "mednext_v1", "variant": "base"},
     )

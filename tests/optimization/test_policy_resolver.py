@@ -311,7 +311,7 @@ def test_absent_triton_guards_depthwise_but_does_not_disable_pointwise():
         operator, context(), "training"
     )
     assert result.implementation == "pointwise_gemm_per_sample"
-    assert "grad_enabled" in result.execution_guards
+    assert {"grad_enabled", "rank_5", "contiguous"} <= set(result.execution_guards)
 
 
 def test_metadata_guards_enforce_family_phase_and_approximation():

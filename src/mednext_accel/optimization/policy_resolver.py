@@ -259,7 +259,7 @@ class PolicyResolver:
         if selection.implementation.startswith("triton_"):
             execution_guards = ("grad_enabled", "rank_5", "contiguous", "zero_output_padding")
         elif selection.implementation == "pointwise_gemm_per_sample":
-            execution_guards = ("grad_enabled",)
+            execution_guards = ("grad_enabled", "rank_5", "contiguous")
         return PolicyDecision(
             descriptor,
             phase,

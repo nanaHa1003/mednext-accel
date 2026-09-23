@@ -37,6 +37,7 @@ def kernel_result():
     )
     return case, {
         "benchmark_kind": "integrated_operator",
+        "gradient_mask": (True, True, True),
         "memory_measured": True,
         "status": "ok",
         "valid": True,
