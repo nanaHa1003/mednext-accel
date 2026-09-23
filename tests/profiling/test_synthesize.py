@@ -301,10 +301,22 @@ def test_incomplete_only_alternatives_leave_a_gap():
     assert profile.rules == ()
 
 
-def test_aggregate_rejection_does_not_turn_valid_winner_into_reference():
+def test_aggregate_rejection_preserves_conclusive_negative_alternative():
     winner = measured(2, 10.0, 7.0)
     loser = replace(winner, candidate_ms=12.0, parameters=(("tile", 32),))
     profile = synthesize_profile(
         [winner, loser], name="aggregate", sm=(12, 0), objective="balanced", include_winners=False
+    )
+    assert len(profile.rules) == 1
+    assert profile.rules[0].use["training"].implementation == "reference"
+
+
+def test_aggregate_rejection_without_negative_evidence_leaves_a_gap():
+    profile = synthesize_profile(
+        [measured(2, 10.0, 7.0)],
+        name="aggregate",
+        sm=(12, 0),
+        objective="balanced",
+        include_winners=False,
     )
     assert profile.rules == ()

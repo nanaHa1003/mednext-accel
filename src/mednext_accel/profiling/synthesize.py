@@ -301,18 +301,19 @@ def synthesize_profile(
             if (item.implementation, tuple(sorted(item.parameters))) not in rejected
             and candidate_wins(item, objective)
         ]
-        if winners:
-            if include_winners:
-                winner = min(
-                    winners,
-                    key=lambda item: (
-                        item.candidate_peak_bytes if objective == "memory" else item.candidate_ms,
-                        item.implementation,
-                        tuple(sorted(item.parameters)),
-                    ),
-                )
-                selected.append((winner, winner.implementation, tuple(sorted(winner.parameters))))
+        if winners and include_winners:
+            winner = min(
+                winners,
+                key=lambda item: (
+                    item.candidate_peak_bytes if objective == "memory" else item.candidate_ms,
+                    item.implementation,
+                    tuple(sorted(item.parameters)),
+                ),
+            )
+            selected.append((winner, winner.implementation, tuple(sorted(winner.parameters))))
             continue
+        # Suppressed winners cannot protect against inherited rejected recipes.
+        # Preserve conclusive negative evidence in a negative-only overlay.
         negative = next(
             (
                 item

@@ -103,3 +103,62 @@ def test_generated_rules_match_observed_kernel_geometry_and_model_variant():
     assert rule.when["stride"] == (1, 1, 1)
     assert rule.when["model_family"] == "mednext_v1"
     assert rule.when["variant"] == "base"
+
+
+@pytest.mark.parametrize("include_winners", [True, False])
+@pytest.mark.parametrize("negative", [{"kernel_valid": False}, {"candidate_ms": 12.0}])
+def test_suppressed_alternative_preserves_tombstone_for_rejected_inherited_recipe(
+    include_winners, negative
+):
+    rejected = measurement(
+        family="depthwise_conv3d",
+        phase="backward_weight",
+        implementation="triton_split_dw",
+        batch=1,
+        in_channels=32,
+        out_channels=32,
+        kernel_size=3,
+        parameters=(("dw_block", 512), ("dw_splits", 64)),
+        **negative,
+    )
+    winner = replace(
+        rejected,
+        kernel_valid=True,
+        candidate_ms=7.0,
+        parameters=(("dw_block", 256), ("dw_splits", 64)),
+    )
+    op = OperatorDescriptor(
+        "depthwise_conv3d", "regular", 32, 32, (3,) * 3, (1,) * 3, (1,) * 3, (1,) * 3, 32
+    )
+    ctx = ExecutionContext(
+        "training",
+        "cuda",
+        (8, 9),
+        48 * 1024**3,
+        "bfloat16",
+        1,
+        (128,) * 3,
+        "mednext_v1",
+        "base",
+        "none",
+    )
+    inherited = PolicyRegistry().resolver().resolve(op, ctx, "backward_weight")
+    assert inherited.implementation == "triton_split_dw"
+    assert inherited.parameters == {"dw_block": 512, "dw_splits": 64}
+
+    policy = synthesize_profile(
+        [rejected, winner],
+        name="local",
+        sm=(8, 9),
+        objective="balanced",
+        include_winners=include_winners,
+    )
+    resolve = PolicyRegistry(external=policy_to_primitive(policy)).resolver()
+    selected = resolve.resolve(op, ctx, "backward_weight")
+    assert selected.policy == "local"
+    if include_winners:
+        assert selected.implementation == "triton_split_dw"
+        assert selected.parameters == {"dw_block": 256, "dw_splits": 64}
+    else:
+        assert selected.implementation == "reference"
+    assert resolve.resolve(op, replace(ctx, batch_size=2), "backward_weight").policy != "local"
