@@ -55,6 +55,7 @@ def test_depthwise_probe_executes_planned_parameters_and_labels_evidence(
         torch, "randn", lambda *args, **kwargs: randn(*args, **{**kwargs, "device": "cpu"})
     )
     monkeypatch.setattr(torch.cuda, "empty_cache", lambda: None)
+    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda device=None: (12, 0))
     monkeypatch.setattr(
         runner, "_timed", lambda function, **kwargs: (1.0 if function() is not None else 0.0, 64)
     )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -176,7 +177,14 @@ def test_invalid_optimization_mode_is_rejected(mode: str) -> None:
         mednext_small(in_channels=1, out_channels=2, optimization=mode)
 
 
-def test_explain_optimization_reports_batch_three_gemm() -> None:
+def test_explain_optimization_reports_batch_three_gemm(monkeypatch) -> None:
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda device=None: (12, 0))
+    monkeypatch.setattr(
+        torch.cuda,
+        "get_device_properties",
+        lambda device=None: SimpleNamespace(total_memory=32 * 1024**3),
+    )
     model = mednext_base(in_channels=1, out_channels=3)
     report = model.explain_optimization(
         input_shape=(3, 1, 128, 128, 128), dtype="bfloat16", device="cuda:0"
