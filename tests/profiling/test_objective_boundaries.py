@@ -26,6 +26,8 @@ def kernel(*, reference_ms=10.0, candidate_ms=8.0, reference_peak=100, candidate
         reference_peak,
         candidate_peak,
         True,
+        benchmark_kind="integrated_operator",
+        memory_measured=True,
     )
 
 

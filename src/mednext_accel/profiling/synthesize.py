@@ -64,11 +64,14 @@ class Measurement:
     compile_mode: str | None = None
     gradient_mask: tuple[bool, bool, bool] | None = None
     raw_diagnostic: Mapping[str, object] = field(default_factory=dict)
+    # None preserves older evidence whose memory accounting was not recorded.
+    memory_measured: bool | None = None
 
     def __post_init__(self) -> None:
         if self.benchmark_kind not in ("raw_kernel_diagnostic", "integrated_operator"):
             raise ValueError("unsupported benchmark_kind")
         require_string(self.compile_mode, "compile_mode", nullable=True)
+        require_bool(self.memory_measured, "memory_measured", nullable=True)
         if self.gradient_mask is not None:
             require_sequence(self.gradient_mask, "gradient_mask")
             if len(self.gradient_mask) != 3:
@@ -164,7 +167,13 @@ class Measurement:
                 raise ValueError("objective_winner requires an objective")
         elif self.objective not in OBJECTIVES:
             raise ValueError("unsupported objective")
-        elif self.objective_winner is not candidate_wins(self, self.objective):
+        elif (
+            self.benchmark_kind == "integrated_operator"
+            # Historical verdicts may predate memory-accounting metadata. They
+            # remain diagnostic; current dispatch always recomputes eligibility.
+            and (self.objective == "throughput" or self.memory_measured is not None)
+            and self.objective_winner is not candidate_wins(self, self.objective)
+        ):
             raise ValueError("objective_winner contradicts the objective and kernel measurements")
 
     def to_primitive(self) -> dict[str, object]:
@@ -203,6 +212,7 @@ def measurement_from_result(
             "compile_mode",
             "gradient_mask",
             "raw_diagnostic",
+            "memory_measured",
         },
         "kernel result",
         required=set(),
@@ -242,6 +252,7 @@ def measurement_from_result(
         compile_mode=result.get("compile_mode"),
         gradient_mask=result.get("gradient_mask"),
         raw_diagnostic=result.get("raw_diagnostic", {}),
+        memory_measured=result.get("memory_measured"),
     )
     return replace(item, objective=objective, objective_winner=candidate_wins(item, objective))
 
@@ -250,9 +261,11 @@ def candidate_wins(item: Measurement, objective: Objective) -> bool:
     """Return whether a validated candidate satisfies the profile objective."""
     if objective not in ("balanced", "throughput", "memory"):
         raise ValueError(f"unknown profiling objective {objective!r}")
+    if item.benchmark_kind != "integrated_operator":
+        return False
     if item.kernel_valid is not True or item.probe_status != "ok":
         return False
-    if not complete_metrics(item):
+    if not complete_metrics(item, objective):
         return False
     if objective == "throughput":
         return item.candidate_ms < item.reference_ms
@@ -265,16 +278,15 @@ def candidate_wins(item: Measurement, objective: Objective) -> bool:
     )
 
 
-def complete_metrics(item: Measurement) -> bool:
-    """Only a completed, finite measurement can establish a performance loser."""
+def complete_metrics(item: Measurement, objective: Objective = "balanced") -> bool:
+    """Require measured, finite metrics for this objective before calling a loser."""
+    metrics = (item.reference_ms, item.candidate_ms)
+    if objective != "throughput":
+        if item.memory_measured is not True:
+            return False
+        metrics += (item.reference_peak_bytes, item.candidate_peak_bytes)
     return item.probe_status == "ok" and all(
-        type(value) in (int, float) and isfinite(value) and value > 0
-        for value in (
-            item.reference_ms,
-            item.candidate_ms,
-            item.reference_peak_bytes,
-            item.candidate_peak_bytes,
-        )
+        type(value) in (int, float) and isfinite(value) and value > 0 for value in metrics
     )
 
 
@@ -311,6 +323,8 @@ def synthesize_profile(
     """
     by_match: dict[tuple[object, ...], list[Measurement]] = {}
     for item in measurements:
+        if item.benchmark_kind != "integrated_operator":
+            continue
         by_match.setdefault(measurement_identity(item), []).append(item)
     selected = []
     for items in by_match.values():
@@ -346,7 +360,7 @@ def synthesize_profile(
                 if item.kernel_valid is False
                 or (
                     item.kernel_valid is True
-                    and complete_metrics(item)
+                    and complete_metrics(item, objective)
                     and not candidate_wins(item, objective)
                 )
             ),

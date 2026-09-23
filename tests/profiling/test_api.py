@@ -26,6 +26,8 @@ def measured() -> Measurement:
         reference_peak_bytes=200,
         candidate_peak_bytes=100,
         kernel_valid=True,
+        benchmark_kind="integrated_operator",
+        memory_measured=True,
     )
 
 

@@ -26,6 +26,8 @@ def measured(batch: int, reference_ms: float, candidate_ms: float) -> Measuremen
         reference_peak_bytes=100,
         candidate_peak_bytes=100,
         kernel_valid=True,
+        benchmark_kind="integrated_operator",
+        memory_measured=True,
     )
 
 
@@ -199,6 +201,7 @@ def test_measurement_serializes_probe_and_numerical_diagnostics():
     raw = {
         "status": "ok",
         "message": "completed",
+        "benchmark_kind": "integrated_operator",
         "valid": False,
         "validator": "component-relative-l2-v1",
         "validation_metrics": metrics,
@@ -227,7 +230,7 @@ def test_measurement_serializes_probe_and_numerical_diagnostics():
     assert failure["kernel_valid"] is None
 
 
-def test_legacy_direct_measurement_defaults_preserve_synthesis():
+def test_integrated_measurement_without_optional_diagnostics_preserves_synthesis():
     item = measured(1, 4.0, 3.0)
     assert item.kernel_valid is True
     assert not hasattr(item, "whole_model_valid")
@@ -320,3 +323,109 @@ def test_aggregate_rejection_without_negative_evidence_leaves_a_gap():
         include_winners=False,
     )
     assert profile.rules == ()
+
+
+@pytest.mark.parametrize("objective", ["balanced", "throughput", "memory"])
+@pytest.mark.parametrize("include_winners", [True, False])
+@pytest.mark.parametrize(
+    "updates",
+    [
+        {"candidate_ms": 1.0, "candidate_peak_bytes": 1},
+        {"candidate_ms": 12.0},
+        {"kernel_valid": False},
+    ],
+)
+def test_raw_diagnostics_never_create_rules_or_reject_integrated_candidates(
+    objective, include_winners, updates
+):
+    integrated = replace(measured(2, 10.0, 7.0), candidate_peak_bytes=90)
+    raw = replace(integrated, benchmark_kind="raw_kernel_diagnostic", **updates)
+    assert not candidate_wins(raw, objective)
+    options = dict(
+        name="diagnostics", sm=(12, 0), objective=objective, include_winners=include_winners
+    )
+    assert synthesize_profile([raw], **options).rules == ()
+    mixed = synthesize_profile([raw, integrated], **options)
+    expected = synthesize_profile([integrated], **options)
+    assert mixed == expected
+
+
+def test_legacy_winner_deserializes_as_diagnostic_and_cannot_synthesize_rules():
+    from mednext_accel.profiling.campaign import campaign_to_primitive, load_campaign
+    from mednext_accel.profiling.evidence import (
+        CampaignEvidence,
+        EnvironmentEvidence,
+        ProfilingEvidence,
+    )
+
+    original = replace(measured(2, 10.0, 7.0), objective="balanced", objective_winner=True)
+    evidence = ProfilingEvidence(
+        EnvironmentEvidence({"gpu": {"sm": [12, 0]}}),
+        CampaignEvidence(campaign_to_primitive(load_campaign(None))),
+        kernel_measurements=(original,),
+    )
+    document = evidence.to_primitive()
+    legacy = document["kernel_measurements"][0]
+    for field in (
+        "benchmark_kind",
+        "compile_mode",
+        "gradient_mask",
+        "raw_diagnostic",
+        "memory_measured",
+    ):
+        del legacy[field]
+    restored = ProfilingEvidence.from_primitive(document).kernel_measurements[0]
+    assert restored.benchmark_kind == "raw_kernel_diagnostic"
+    assert restored.memory_measured is None
+    assert restored.objective_winner is True  # Historical diagnostic, not a dispatch verdict.
+    assert not candidate_wins(restored, "balanced")
+    assert (
+        synthesize_profile([restored], name="legacy", sm=(12, 0), objective="balanced").rules == ()
+    )
+
+
+@pytest.mark.parametrize("objective", ["balanced", "memory"])
+@pytest.mark.parametrize("compile_mode", ["reduce-overhead", "max-autotune"])
+@pytest.mark.parametrize("candidate_ms,candidate_peak", [(1.0, 1), (12.0, 1000)])
+def test_cudagraph_memory_unavailable_is_neither_a_winner_nor_a_loser(
+    objective, compile_mode, candidate_ms, candidate_peak
+):
+    item = replace(
+        measured(2, 10.0, candidate_ms),
+        compile_mode=compile_mode,
+        candidate_peak_bytes=candidate_peak,
+        memory_measured=False,
+    )
+    assert not candidate_wins(item, objective)
+    assert (
+        synthesize_profile([item], name="unavailable", sm=(12, 0), objective=objective).rules == ()
+    )
+
+
+@pytest.mark.parametrize(
+    "candidate_ms,implementation", [(1.0, "pointwise_gemm_per_sample"), (12.0, "reference")]
+)
+def test_throughput_uses_latency_when_memory_is_unavailable(candidate_ms, implementation):
+    item = replace(
+        measured(2, 10.0, candidate_ms),
+        compile_mode="reduce-overhead",
+        memory_measured=False,
+        reference_peak_bytes=None,
+        candidate_peak_bytes=None,
+    )
+    profile = synthesize_profile([item], name="latency", sm=(12, 0), objective="throughput")
+    assert len(profile.rules) == 1
+    assert profile.rules[0].use["training"].implementation == implementation
+
+
+def test_unrecorded_memory_retains_legacy_verdict_but_cannot_establish_memory_policy():
+    original = replace(measured(2, 10.0, 7.0), objective="balanced", objective_winner=True)
+    fields = original.to_primitive()
+    fields.pop("memory_measured", None)
+    restored = Measurement(**fields)
+    assert restored.memory_measured is None
+    assert restored.objective_winner is True
+    assert not candidate_wins(restored, "balanced")
+    assert (
+        synthesize_profile([restored], name="legacy", sm=(12, 0), objective="balanced").rules == ()
+    )

@@ -28,6 +28,8 @@ def test_generated_provisional_policy_roundtrips_and_is_factory_input(tmp_path):
         True,
         (("dx_block", 128),),
         kernel_size=3,
+        benchmark_kind="integrated_operator",
+        memory_measured=True,
     )
     policy = synthesize_profile([item], name="provisional", sm=(12, 0), objective="balanced")
     path = tmp_path / "provisional.policy.yaml"

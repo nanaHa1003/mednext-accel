@@ -346,11 +346,8 @@ def test_numerical_failure_survives_later_failure_and_subprocess_ingestion(
     policy = synthesize_profile(
         [measurement], name="known-invalid", sm=(8, 9), objective="balanced"
     )
-    assert len(policy.rules) == 1
-    assert policy.rules[0].use["training"].implementation == "reference"
-    assert policy.rules[0].when["batch"].minimum == cpu_probe["batch"]
-    assert policy.rules[0].when["batch"].maximum == cpu_probe["batch"]
-    assert policy.rules[0].when["spatial_shape"] == cpu_probe["spatial_shape"]
+    assert measurement.benchmark_kind == "raw_kernel_diagnostic"
+    assert policy.rules == (), "raw numerical diagnostics must not select runtime rules"
 
 
 @pytest.mark.cuda
@@ -405,5 +402,5 @@ def test_cuda_probe_retains_numerical_rejection_before_later_failure(monkeypatch
     assert record.failure_stage == "validation.dX.reference"
     assert record.validation_metrics["output"]["relative_l2"] == 1.0
     policy = synthesize_profile([record], name="invalid", sm=(8, 9), objective="balanced")
-    assert len(policy.rules) == 1
-    assert policy.rules[0].use["training"].implementation == "reference"
+    assert record.benchmark_kind == "raw_kernel_diagnostic"
+    assert policy.rules == (), "raw numerical diagnostics must not select runtime rules"

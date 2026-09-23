@@ -573,7 +573,21 @@ class ProfilingEvidence:
             raise ValueError("expected mednext-accel-evidence version 1")
 
         def load_record(record_type, value, **updates):
-            record_fields(value, {item.name for item in fields(record_type)}, record_type.__name__)
+            names = {item.name for item in fields(record_type)}
+            # Pre-integrated evidence remains readable, but defaults to raw
+            # diagnostics and cannot establish a runtime dispatch rule.
+            optional = (
+                {
+                    "benchmark_kind",
+                    "compile_mode",
+                    "gradient_mask",
+                    "raw_diagnostic",
+                    "memory_measured",
+                }
+                if record_type is Measurement
+                else set()
+            )
+            record_fields(value, names, record_type.__name__, required=names - optional)
             return record_type(**{**value, **updates})
 
         for name in ("batch_searches", "kernel_measurements", "model_comparisons"):

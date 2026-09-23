@@ -36,6 +36,8 @@ def kernel_result():
         )
     )
     return case, {
+        "benchmark_kind": "integrated_operator",
+        "memory_measured": True,
         "status": "ok",
         "valid": True,
         "reference_ms": 10.0,
@@ -80,7 +82,7 @@ def test_non_boolean_kernel_child_verdict_is_rejected(value):
         measurement_from_result(case, raw, checkpointing="none")
 
 
-@pytest.mark.parametrize("field", ["kernel_valid", "objective_winner"])
+@pytest.mark.parametrize("field", ["kernel_valid", "objective_winner", "memory_measured"])
 @pytest.mark.parametrize("value", ["false", 1, 0])
 def test_kernel_evidence_verdicts_cannot_be_coerced(field, value):
     data = document()

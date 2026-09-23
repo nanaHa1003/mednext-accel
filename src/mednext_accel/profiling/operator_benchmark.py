@@ -55,6 +55,7 @@ def benchmark_operator(
         gradient_mask=tuple(gradient_mask),
         implementation=key.implementation,
         parameters=key.parameters,
+        memory_measured=False,
     )
     probe.stage = "operator.initialization"
     constructor = nn.ConvTranspose3d if key.direction == "transpose" else nn.Conv3d
@@ -172,4 +173,10 @@ def benchmark_operator(
         )
     probe.result["valid"] = probe.result["rejection_reason"] is None
     _time_pair(probe, lambda: training(native), lambda: training(candidate))
+    # Replay does not expose CUDA Graph working storage through allocator peaks.
+    # Retain the observed scalar peaks, but do not use them for memory objectives.
+    probe.result["memory_measured"] = compile_mode == "eager" or (
+        compile_mode in ("default", "max-autotune-no-cudagraphs")
+        and not torch._inductor.config.triton.cudagraphs
+    )
     return {**probe.result, "status": "ok"}

@@ -36,6 +36,8 @@ def records():
         200,
         100,
         True,
+        benchmark_kind="integrated_operator",
+        memory_measured=True,
     )
     evidence = ProfilingEvidence(
         EnvironmentEvidence({"gpu": {"sm": [12, 0]}, "software": {}}),

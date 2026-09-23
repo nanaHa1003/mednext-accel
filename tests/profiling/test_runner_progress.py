@@ -214,6 +214,8 @@ def _prepare_campaign(monkeypatch, *, batches=(2,), depthwise=()):
 
 def _winning_result():
     return {
+        "benchmark_kind": "integrated_operator",
+        "memory_measured": True,
         "status": "ok",
         "valid": True,
         "reference_ms": 10.0,

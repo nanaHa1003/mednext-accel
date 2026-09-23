@@ -27,6 +27,8 @@ def measurement(**updates):
         100,
         100,
         True,
+        benchmark_kind="integrated_operator",
+        memory_measured=True,
         workload={"model_family": "mednext_v1", "variant": "base"},
     )
     return replace(base, **updates)

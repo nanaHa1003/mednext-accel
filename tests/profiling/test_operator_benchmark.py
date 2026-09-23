@@ -95,6 +95,7 @@ def test_dispatch_evidence_retains_raw_diagnostics_without_using_their_timings()
         "compile_mode": "default",
         "gradient_mask": [False, True, True],
         "raw_diagnostic": raw,
+        "memory_measured": False,
     }
     evidence = measurement_from_result(make_case(), result, checkpointing="none")
     restored = Measurement(**evidence.to_primitive())
@@ -102,6 +103,7 @@ def test_dispatch_evidence_retains_raw_diagnostics_without_using_their_timings()
     assert restored.compile_mode == "default"
     assert restored.gradient_mask == (False, True, True)
     assert restored.raw_diagnostic == raw
+    assert restored.memory_measured is False
     assert restored.candidate_ms == 3.0
     assert restored.objective_winner is False
     with pytest.raises(TypeError):
@@ -113,7 +115,16 @@ def test_dispatch_evidence_retains_raw_diagnostics_without_using_their_timings()
 )
 @pytest.mark.cuda
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
-@pytest.mark.parametrize("compile_mode", ["eager", "default", "reduce-overhead"])
+@pytest.mark.parametrize(
+    "compile_mode,memory_measured",
+    [
+        ("eager", True),
+        ("default", True),
+        ("reduce-overhead", False),
+        ("max-autotune", False),
+        ("max-autotune-no-cudagraphs", True),
+    ],
+)
 @pytest.mark.parametrize("mask", [(True, True, True), (False, True, False)])
 @pytest.mark.parametrize(
     "case",
@@ -125,7 +136,9 @@ def test_dispatch_evidence_retains_raw_diagnostics_without_using_their_timings()
         make_case(pointwise=True),
     ],
 )
-def test_integrated_benchmark_validates_and_times_actual_adaptive_modules(case, compile_mode, mask):
+def test_integrated_benchmark_validates_and_times_actual_adaptive_modules(
+    case, compile_mode, mask, memory_measured
+):
     result = runner._operator_probe(
         case_payload(case, seed=13, compile_mode=compile_mode, gradient_mask=mask)
     )
@@ -133,6 +146,9 @@ def test_integrated_benchmark_validates_and_times_actual_adaptive_modules(case, 
     assert result["valid"] is True, result
     assert result["benchmark_kind"] == "integrated_operator"
     assert result["compile_mode"] == compile_mode
+    assert result["memory_measured"] is memory_measured
+    evidence = measurement_from_result(case, result, checkpointing="none")
+    assert evidence.memory_measured is memory_measured
     assert result["gradient_mask"] == mask
     assert set(result["validation_metrics"]) == (
         {"output", "dX", "dW", "dB"} if mask[0] else {"output", "dW"}
@@ -236,3 +252,25 @@ def test_native_fallback_cannot_be_recorded_as_the_requested_custom_candidate():
     assert result["status"] == "error"
     assert "did not select" in result["message"]
     assert "candidate_ms" not in result
+
+
+@pytest.mark.cuda
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.parametrize("compile_mode", ["eager", "default", "max-autotune-no-cudagraphs"])
+def test_non_graph_timing_accounts_for_live_working_allocations(compile_mode):
+    torch.compiler.reset()
+    sample = torch.randn(1 << 18, device="cuda")
+
+    def operator(value):
+        return value.sin()
+
+    forward = (
+        operator
+        if compile_mode == "eager"
+        else torch.compile(operator, mode=compile_mode, fullgraph=True)
+    )
+    forward(sample)  # Complete compilation before establishing the live baseline.
+    torch.cuda.synchronize()
+    baseline = torch.cuda.memory_allocated()
+    _, peak = runner._timed(lambda: forward(sample))
+    assert peak >= baseline + sample.numel() * sample.element_size()
