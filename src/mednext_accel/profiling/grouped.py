@@ -19,10 +19,24 @@ def case_seed(case: KernelCase, campaign_seed: int) -> int:
     return int.from_bytes(sha256(identity.encode()).digest()[:8], "big") & (2**63 - 1)
 
 
-def case_payload(case: KernelCase, *, seed: int = 0) -> dict[str, object]:
+def case_payload(
+    case: KernelCase,
+    *,
+    seed: int = 0,
+    compile_mode: str = "default",
+    gradient_mask: tuple[bool, bool, bool] = (True, True, True),
+    benchmark_kind: str = "integrated_operator",
+) -> dict[str, object]:
     """Serialize one kernel case for the child protocol."""
 
-    return {"case_id": case.identifier, "seed": case_seed(case, seed), **asdict(case.key)}
+    return {
+        "case_id": case.identifier,
+        "seed": case_seed(case, seed),
+        "compile_mode": compile_mode,
+        "benchmark_kind": benchmark_kind,
+        "gradient_mask": gradient_mask,
+        **asdict(case.key),
+    }
 
 
 def response_matches(group: KernelGroup, result: Mapping[str, object]) -> bool:
@@ -46,6 +60,7 @@ def run_group_with_bisection(
     on_attempt: AttemptCallback | None = None,
     *,
     seed: int = 0,
+    compile_mode: str = "default",
 ) -> dict[str, dict[str, object]]:
     """Run a group, bisecting infrastructure failures down to singleton cases."""
 
@@ -53,7 +68,10 @@ def run_group_with_bisection(
         result = invoke(
             {
                 "kind": "kernel_group",
-                "cases": [case_payload(case, seed=seed) for case in current.cases],
+                "cases": [
+                    case_payload(case, seed=seed, compile_mode=compile_mode)
+                    for case in current.cases
+                ],
             }
         )
         if result.get("status") == "ok" and not response_matches(current, result):
@@ -79,6 +97,9 @@ def run_group_with_bisection(
                 case.identifier: {
                     "case_id": case.identifier,
                     "seed": case_seed(case, seed),
+                    "benchmark_kind": "integrated_operator",
+                    "compile_mode": compile_mode,
+                    "gradient_mask": (True, True, True),
                     **result,
                 }
             }

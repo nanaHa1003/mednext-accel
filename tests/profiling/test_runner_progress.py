@@ -115,7 +115,10 @@ def test_kernel_group_child_runs_cases_in_order_and_cleans_up_each(monkeypatch) 
     result = runner._child(
         {
             "kind": "kernel_group",
-            "cases": [case_payload(pointwise), case_payload(depthwise)],
+            "cases": [
+                case_payload(pointwise, benchmark_kind="raw_kernel_diagnostic"),
+                case_payload(depthwise, benchmark_kind="raw_kernel_diagnostic"),
+            ],
         }
     )
 
@@ -158,7 +161,10 @@ def test_kernel_group_child_converts_case_exceptions_and_continues(monkeypatch) 
     monkeypatch.setattr(runner, "_pointwise_probe", probe)
 
     result = runner._child(
-        {"kind": "kernel_group", "cases": [case_payload(case) for case in cases]}
+        {
+            "kind": "kernel_group",
+            "cases": [case_payload(case, benchmark_kind="raw_kernel_diagnostic") for case in cases],
+        }
     )
 
     assert result == {
@@ -303,9 +309,11 @@ def test_campaign_shares_groups_and_materializes_each_checkpoint_context(monkeyp
     groups = []
     validations = {"none": [], "all-expansion": []}
 
-    def execute_group(group, invoke, on_attempt=None, *, seed=0):
+    def execute_group(group, invoke, on_attempt=None, *, seed=0, compile_mode="default"):
         groups.append(group)
-        return run_group_with_bisection(group, invoke, on_attempt=on_attempt, seed=seed)
+        return run_group_with_bisection(
+            group, invoke, on_attempt=on_attempt, seed=seed, compile_mode=compile_mode
+        )
 
     def invoke(payload):
         if payload["kind"] == "model":

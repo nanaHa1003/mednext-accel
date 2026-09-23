@@ -28,7 +28,7 @@ from .execution import (
     validate_campaign_dtypes,
 )
 from .grouped import run_group_with_bisection
-from .matrix import depthwise_parameters
+from .matrix import KernelCase, depthwise_parameters
 from .progress import ProgressEvent, ProgressReporter
 from .synthesize import (
     Measurement,
@@ -76,6 +76,8 @@ def _record_probe(kind):
             import torch
 
             probe = _ProbeRecord(f"{kind}.setup", {"seed": int(payload.get("seed", 0))})
+            if kind in ("pointwise", "depthwise"):
+                probe.result["benchmark_kind"] = "raw_kernel_diagnostic"
             try:
                 probe.result.update(function(payload, probe))
             except Exception as error:
@@ -431,6 +433,24 @@ def _depthwise_probe(payload: dict[str, object], probe: _ProbeRecord) -> dict[st
     return {"status": "ok"}
 
 
+@_record_probe("operator")
+def _operator_probe(payload: dict[str, object], probe: _ProbeRecord) -> dict[str, object]:
+    from .operator_benchmark import benchmark_operator
+
+    probe.result.update(
+        benchmark_kind="integrated_operator",
+        compile_mode=payload["compile_mode"],
+        gradient_mask=tuple(payload["gradient_mask"]),
+    )
+    return benchmark_operator(
+        KernelCase.from_payload(payload),
+        compile_mode=str(payload["compile_mode"]),
+        seed=int(payload["seed"]),
+        gradient_mask=tuple(payload["gradient_mask"]),
+        probe=probe,
+    )
+
+
 def _kernel_group_probe(payload: dict[str, object]) -> dict[str, object]:
     import torch
 
@@ -443,11 +463,23 @@ def _kernel_group_probe(payload: dict[str, object]) -> dict[str, object]:
         try:
             family = str(case["family"])
             if family == "pointwise_conv3d":
-                result = _pointwise_probe(case)
+                raw_probe = _pointwise_probe
             elif family in ("depthwise_conv3d", "depthwise_conv_transpose3d"):
-                result = _depthwise_probe(case)
+                raw_probe = _depthwise_probe
             else:
                 raise ValueError(f"unknown kernel family {family!r}")
+            if case.get("benchmark_kind") == "integrated_operator":
+                result = _operator_probe(case)
+                # Raw measurements are diagnostic only; their verdict and
+                # timings never replace the integrated dispatch evidence.
+                gc.collect()
+                torch.cuda.empty_cache()
+                result["raw_diagnostic"] = {
+                    **raw_probe(case),
+                    "benchmark_kind": "raw_kernel_diagnostic",
+                }
+            else:
+                result = raw_probe(case)
         except torch.cuda.OutOfMemoryError:
             result = {"status": "oom", "message": "CUDA out of memory", "failure_stage": "dispatch"}
         except Exception as error:
@@ -774,7 +806,13 @@ def execute_campaign(campaign: Campaign, progress: ProgressReporter | None = Non
 
     for group in plan.kernel_groups:
         raw_results.update(
-            run_group_with_bisection(group, _invoke, on_attempt=on_attempt, seed=campaign.seed)
+            run_group_with_bisection(
+                group,
+                _invoke,
+                on_attempt=on_attempt,
+                seed=campaign.seed,
+                compile_mode=campaign.compile_mode,
+            )
         )
 
     cases_by_key = {case.key: case for case in plan.kernel_cases}

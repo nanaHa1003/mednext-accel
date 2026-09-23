@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import asdict, dataclass
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass, fields
 
 from ..optimization.descriptors import ExecutionContext, OperatorDescriptor
 from ..optimization.parameters import parameter_defaults
@@ -29,6 +30,14 @@ class KernelCaseKey:
 @dataclass(frozen=True, slots=True)
 class KernelCase:
     key: KernelCaseKey
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, object]) -> KernelCase:
+        """Recover the case key without folding execution settings into identity."""
+        values = {field.name: payload[field.name] for field in fields(KernelCaseKey)}
+        values["spatial_shape"] = tuple(values["spatial_shape"])
+        values["parameters"] = tuple(tuple(item) for item in values["parameters"])
+        return cls(KernelCaseKey(**values))
 
     @property
     def identifier(self) -> str:

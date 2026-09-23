@@ -78,7 +78,7 @@ def test_depthwise_probe_executes_planned_parameters_and_labels_evidence(
     case = next(item for item in cases if item.key.phase == phase)
     if supplied:
         case = replace(case, key=replace(case.key, parameters=planned))
-    payload = case_payload(case)
+    payload = case_payload(case, benchmark_kind="raw_kernel_diagnostic")
     if supplied:
         result = runner._kernel_group_probe({"cases": [payload]})["results"][0]
     else:
@@ -94,6 +94,7 @@ def test_depthwise_probe_executes_planned_parameters_and_labels_evidence(
         if supplied
         else legacy
     )
+    assert result["benchmark_kind"] == "raw_kernel_diagnostic"
     assert result["status"] == "ok"
     assert calls == [expected, expected]
     evidence = measurement_from_result(case, result, checkpointing="none")

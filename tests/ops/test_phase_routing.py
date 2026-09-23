@@ -234,3 +234,95 @@ def test_cross_sm_policy_first_fullgraph_call_warns_once_outside_trace(kind, pla
     assert decision.warning == str(notices[0].message)
     for value, target in zip((actual, *got), (expected, *wanted), strict=True):
         assert (value.float() - target.float()).norm() / target.float().norm() < 0.02
+
+
+def directional_wrapper(conv, direction):
+    phases = {
+        "regular": {"backward_input": "triton_depthwise_dx", "backward_weight": "triton_split_dw"},
+        "downsample": {"backward_input": "triton_downsample_dx"},
+        "transpose": {"backward_weight": "triton_transpose_split_dw"},
+    }
+    policy = parse_policy(
+        {
+            "version": 2,
+            "kind": "mednext-accel-policy",
+            "name": "mask-test",
+            "target": {"vendor": "nvidia"},
+            "rules": [
+                {
+                    "id": direction,
+                    "when": {
+                        "family": "depthwise_conv_transpose3d"
+                        if direction == "transpose"
+                        else "depthwise_conv3d",
+                        "direction": direction,
+                    },
+                    "use": {
+                        phase: {"implementation": implementation, "parameters": "auto"}
+                        for phase, implementation in phases[direction].items()
+                    },
+                    "confidence": "measured-exact-context",
+                }
+            ],
+        }
+    )
+    return AdaptiveDepthwise3d(
+        conv,
+        PolicyResolver(external=policy),
+        ModelOptimizationContext("mednext_v1", "base", "none"),
+    )
+
+
+@pytest.mark.parametrize("direction", ["regular", "downsample", "transpose"])
+@pytest.mark.parametrize(
+    "mask",
+    [
+        (True, False, False),
+        (False, True, False),
+        (False, False, True),
+        (True, True, False),
+        (False, True, True),
+        (True, True, True),
+    ],
+)
+@pytest.mark.parametrize("compiled", [False, True])
+def test_requested_gradient_masks_match_native_and_skip_unused_phases(direction, mask, compiled):
+    torch.manual_seed(47)
+    cls = nn.ConvTranspose3d if direction == "transpose" else nn.Conv3d
+    reference = cls(
+        2, 2, 3, padding=1, stride=1 if direction == "regular" else 2, groups=2, device="cuda"
+    )
+    candidate = directional_wrapper(copy.deepcopy(reference), direction)
+    for module in (reference, candidate):
+        module.weight.requires_grad_(mask[1])
+        module.bias.requires_grad_(mask[2])
+    x = torch.randn(1, 2, 5, 5, 5, device="cuda", dtype=torch.bfloat16, requires_grad=mask[0])
+    y = x.detach().clone().requires_grad_(mask[0])
+    if compiled:
+        torch.compiler.reset()
+    forward = torch.compile(candidate, fullgraph=True) if compiled else candidate
+    with torch.autocast("cuda", dtype=torch.bfloat16):
+        expected, actual = reference(x), forward(y)
+    gradient = torch.randn_like(expected)
+    expected.backward(gradient)
+    with ObserveConvolution() as observed:
+        actual.backward(gradient)
+    torch.testing.assert_close(actual, expected)
+    for wanted, got, needed in zip(
+        (x, *reference.parameters()), (y, *candidate.parameters()), mask, strict=True
+    ):
+        if needed:
+            assert got.grad is not None
+            assert (
+                got.grad.float() - wanted.grad.float()
+            ).norm() / wanted.grad.float().norm() < 0.02
+        else:
+            assert got.grad is None
+    if not compiled:
+        custom_dx = direction != "transpose" and mask[0]
+        custom_dw = direction != "downsample" and mask[1]
+        native_mask = (mask[0] and not custom_dx, mask[1] and not custom_dw, mask[2])
+        assert observed.masks == ([native_mask] if any(native_mask) else [])
+        custom_ops = [op for op in observed.operations if op.startswith("mednext_accel::")]
+        assert any("input_grad" in op for op in custom_ops) == custom_dx
+        assert any("weight_grad" in op for op in custom_ops) == custom_dw

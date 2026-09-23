@@ -689,23 +689,28 @@ def _setup_stride2_context(ctx, inputs, output):
 def _stride2_backward(ctx, grad_output):
     x, weight = ctx.saved_tensors
     grad_output = grad_output.contiguous()
-    grad_input = depthwise_input_grad_stride2_regular(
-        grad_output, weight, ctx.channels, ctx.spatial_size, ctx.dx_block
-    )
-    padding = ctx.kernel_size // 2
-    _, grad_weight, grad_bias = torch.ops.aten.convolution_backward(
-        grad_output,
-        x,
-        weight,
-        [ctx.channels] if ctx.has_bias else None,
-        [2, 2, 2],
-        [padding, padding, padding],
-        [1, 1, 1],
-        False,
-        [0, 0, 0],
-        ctx.channels,
-        [False, True, ctx.has_bias],
-    )
+    need_dx, need_dw, need_db = ctx.needs_input_grad[:3]
+    grad_input = grad_weight = grad_bias = None
+    if need_dx:
+        grad_input = depthwise_input_grad_stride2_regular(
+            grad_output, weight, ctx.channels, ctx.spatial_size, ctx.dx_block
+        )
+    native_mask = [False, need_dw, need_db and ctx.has_bias]
+    if any(native_mask):
+        padding = ctx.kernel_size // 2
+        _, grad_weight, grad_bias = torch.ops.aten.convolution_backward(
+            grad_output,
+            x,
+            weight,
+            [ctx.channels] if ctx.has_bias else None,
+            [2, 2, 2],
+            [padding, padding, padding],
+            [1, 1, 1],
+            False,
+            [0, 0, 0],
+            ctx.channels,
+            native_mask,
+        )
     return grad_input, grad_weight, grad_bias if ctx.has_bias else None, None, None, None, None
 
 
@@ -800,23 +805,34 @@ def _setup_transpose_regular_context(ctx, inputs, output):
 def _transpose_regular_backward(ctx, grad_output):
     x, weight = ctx.saved_tensors
     grad_output = grad_output.contiguous()
-    padding = ctx.kernel_size // 2
-    grad_input, _, grad_bias = torch.ops.aten.convolution_backward(
-        grad_output,
-        x,
-        weight,
-        [ctx.channels] if ctx.has_bias else None,
-        [2, 2, 2],
-        [padding, padding, padding],
-        [1, 1, 1],
-        True,
-        [0, 0, 0],
-        ctx.channels,
-        [True, False, ctx.has_bias],
-    )
-    grad_weight = depthwise_transpose_weight_grad_regular(
-        x, grad_output, ctx.kernel_size, ctx.channels, ctx.spatial_size, ctx.dw_splits, ctx.dw_block
-    )
+    need_dx, need_dw, need_db = ctx.needs_input_grad[:3]
+    grad_input = grad_weight = grad_bias = None
+    native_mask = [need_dx, False, need_db and ctx.has_bias]
+    if any(native_mask):
+        padding = ctx.kernel_size // 2
+        grad_input, _, grad_bias = torch.ops.aten.convolution_backward(
+            grad_output,
+            x,
+            weight,
+            [ctx.channels] if ctx.has_bias else None,
+            [2, 2, 2],
+            [padding, padding, padding],
+            [1, 1, 1],
+            True,
+            [0, 0, 0],
+            ctx.channels,
+            native_mask,
+        )
+    if need_dw:
+        grad_weight = depthwise_transpose_weight_grad_regular(
+            x,
+            grad_output,
+            ctx.kernel_size,
+            ctx.channels,
+            ctx.spatial_size,
+            ctx.dw_splits,
+            ctx.dw_block,
+        )
     return (
         grad_input,
         grad_weight,

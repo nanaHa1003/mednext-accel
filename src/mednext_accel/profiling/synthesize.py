@@ -60,8 +60,25 @@ class Measurement:
         default_factory=dict
     )
     rejection_reason: str | None = None
+    benchmark_kind: str = "raw_kernel_diagnostic"
+    compile_mode: str | None = None
+    gradient_mask: tuple[bool, bool, bool] | None = None
+    raw_diagnostic: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        if self.benchmark_kind not in ("raw_kernel_diagnostic", "integrated_operator"):
+            raise ValueError("unsupported benchmark_kind")
+        require_string(self.compile_mode, "compile_mode", nullable=True)
+        if self.gradient_mask is not None:
+            require_sequence(self.gradient_mask, "gradient_mask")
+            if len(self.gradient_mask) != 3:
+                raise ValueError("gradient_mask must contain input, weight and bias flags")
+            for value in self.gradient_mask:
+                require_bool(value, "gradient_mask flag")
+            object.__setattr__(self, "gradient_mask", tuple(self.gradient_mask))
+        require_mapping(self.raw_diagnostic, "raw_diagnostic")
+        validate_json(self.raw_diagnostic)
+        object.__setattr__(self, "raw_diagnostic", freeze(self.raw_diagnostic))
         require_bool(self.kernel_valid, "kernel_valid", nullable=True)
         require_bool(self.objective_winner, "objective_winner", nullable=True)
         for name in (
@@ -182,6 +199,10 @@ def measurement_from_result(
             "implementation",
             "parameters",
             "checkpointing",
+            "benchmark_kind",
+            "compile_mode",
+            "gradient_mask",
+            "raw_diagnostic",
         },
         "kernel result",
         required=set(),
@@ -217,6 +238,10 @@ def measurement_from_result(
         validator=result.get("validator"),
         validation_metrics=result.get("validation_metrics", {}),
         rejection_reason=result.get("rejection_reason"),
+        benchmark_kind=result.get("benchmark_kind", "raw_kernel_diagnostic"),
+        compile_mode=result.get("compile_mode"),
+        gradient_mask=result.get("gradient_mask"),
+        raw_diagnostic=result.get("raw_diagnostic", {}),
     )
     return replace(item, objective=objective, objective_winner=candidate_wins(item, objective))
 
