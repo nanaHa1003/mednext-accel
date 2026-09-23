@@ -3,7 +3,9 @@
 # Python; only C128/32^3 B4/B6 change launch parameters relative to the recipe.
 # Pointwise work intervals retain legacy B2..6 (or narrower) endpoints.
 # Only complete positive channel strips merge; isolated rows stay exact.
-# No new integrated RTX 5090 grid evidence is used in this migration.
+# Integrated RTX 5090 default/fullgraph BF16 measurements (2026-09-23) retain
+# bounded native regions for repeated small-work losses. C128/32^3 B1 keeps its
+# measured launch winner between losing generic-recipe neighbors at 31^3/33^3.
 # Nine confidence-only dW overrides and one shadowed pointwise row are omitted.
 version: 2
 kind: mednext-accel-policy
@@ -13,8 +15,37 @@ target:
   sm: [12, 0]
 scope: {dtype: bfloat16}
 evidence:
+- {id: rtx5090-integrated-20260923, sha256: fcf09e73efd6ac355567b5bbe442dc9c63259c4f46e5b99f6b5d4dc854821194}
 - {id: legacy-rtx5090-policy, sha256: d33cf9e7ea50575de8e48d3ed8a1793054ad2459e0f5d61314660ac258746c1b}
 rules:
+  - id: integrated-downsample-small-native
+    when: {family: depthwise_conv3d, direction: downsample, kernel_size: [3, 3, 3], in_channels: {min: 128, max: 256}, work: {min: 864000, max: 4599936}}
+    use: {backward_input: {implementation: reference}}
+    confidence: inferred-same-sm
+  - id: integrated-regular-dx-small-native
+    when: {family: depthwise_conv3d, direction: regular, kernel_size: [3, 3, 3], in_channels: {min: 32, max: 512}, work: {min: 175616, max: 1257728}}
+    use: {backward_input: {implementation: reference}}
+    confidence: inferred-same-sm
+  - id: integrated-regular-dw-small-native
+    when: {family: depthwise_conv3d, direction: regular, kernel_size: [3, 3, 3], in_channels: {min: 32, max: 512}, reduction_work: {min: 343, max: 9826}}
+    use: {backward_weight: {implementation: reference}}
+    confidence: inferred-same-sm
+  - id: integrated-regular-dw-c128-launch-winner
+    when: {family: depthwise_conv3d, direction: regular, kernel_size: [3, 3, 3], channels: [128, 128], spatial_shape: [32, 32, 32], batch: 1}
+    use: {backward_weight: {implementation: triton_split_dw, parameters: auto}}
+    confidence: measured-exact-context
+  - id: integrated-regular-dw-c128-neighbors-native
+    when: {family: depthwise_conv3d, direction: regular, kernel_size: [3, 3, 3], in_channels: 128, reduction_work: {min: 29791, max: 35937}}
+    use: {backward_weight: {implementation: reference}}
+    confidence: inferred-same-sm
+  - id: integrated-transpose-small-native
+    when: {family: depthwise_conv_transpose3d, direction: transpose, kernel_size: [3, 3, 3], in_channels: 256, reduction_work: {min: 4096, max: 4913}}
+    use: {backward_weight: {implementation: reference}}
+    confidence: inferred-same-sm
+  - id: integrated-pointwise-small-native
+    when: {family: pointwise_conv3d, direction: regular, kernel_size: [1, 1, 1], channels: [512, 2048], reduction_work: {min: 1024, max: 2048}}
+    use: {training: {implementation: reference}}
+    confidence: inferred-same-sm
   - id: dw-split-b4-128-32
     when: {family: depthwise_conv3d, direction: regular, kernel_size: [3, 3, 3], batch: 4, spatial_shape: [32, 32, 32], channels: [128, 128]}
     use: {backward_weight: {implementation: triton_split_dw, parameters: {dw_splits: 4}}}
@@ -85,10 +116,6 @@ rules:
     confidence: interpolated-bounded
   - id: pw-b2-b4-4
     when: {family: pointwise_conv3d, direction: regular, kernel_size: [1, 1, 1], in_channels: 256, out_channels: 1024, reduction_work: {min: 8192, max: 16384}}
-    use: {training: {implementation: pointwise_gemm_per_sample}}
-    confidence: interpolated-bounded
-  - id: pw-b2-b4-5
-    when: {family: pointwise_conv3d, direction: regular, kernel_size: [1, 1, 1], in_channels: 512, out_channels: 2048, reduction_work: {min: 1024, max: 2048}}
     use: {training: {implementation: pointwise_gemm_per_sample}}
     confidence: interpolated-bounded
   - id: pw-b2-b4-6

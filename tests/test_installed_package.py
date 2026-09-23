@@ -13,7 +13,10 @@ import pytest
 
 
 @pytest.mark.release
-def test_distributions_exclude_local_review_scratch_and_cache_files(tmp_path: Path) -> None:
+@pytest.mark.parametrize("checkout", ["copy", "worktree"])
+def test_distributions_exclude_local_review_scratch_and_cache_files(
+    tmp_path: Path, checkout: str
+) -> None:
     repository = Path(__file__).parents[1]
     project = tmp_path / "project"
     project.mkdir()
@@ -22,8 +25,27 @@ def test_distributions_exclude_local_review_scratch_and_cache_files(tmp_path: Pa
     shutil.copytree(
         repository / "src", project / "src", ignore=shutil.ignore_patterns("__pycache__")
     )
+    if checkout == "worktree":
+        subprocess.run(["git", "init", "--quiet", str(project)], check=True)
+        subprocess.run(["git", "add", "."], cwd=project, check=True)
+        subprocess.run(
+            [
+                "git", "-c", "user.name=Package Test", "-c", "user.email=test@example.invalid",
+                "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "Package fixture",
+            ],
+            cwd=project,
+            check=True,
+        )
+        worktree = project / ".worktrees" / "archive"
+        subprocess.run(
+            ["git", "worktree", "add", "--quiet", "--detach", str(worktree)],
+            cwd=project,
+            check=True,
+        )
+        project = worktree
     artifacts = (
         ".superpowers/sdd/review.md",
+        "artifacts/integrated-grid/probe.json",
         "dist/final-fix-scratch/probe.json",
         ".pytest_cache/results.json",
         ".ruff_cache/checks.json",
@@ -70,7 +92,14 @@ def test_distributions_exclude_local_review_scratch_and_cache_files(tmp_path: Pa
         )
         assert not any(
             part
-            in {".superpowers", "final-fix-scratch", ".pytest_cache", ".ruff_cache", "__pycache__"}
+            in {
+                ".superpowers",
+                "artifacts",
+                "final-fix-scratch",
+                ".pytest_cache",
+                ".ruff_cache",
+                "__pycache__",
+            }
             for name in names
             for part in Path(name).parts
         ), names

@@ -5,7 +5,7 @@
 MedNeXt-Accel is a production-oriented implementation of MedNeXt model
 architectures for PyTorch. It provides a pure-PyTorch reference model, lossless
 checkpoint import, selective activation checkpointing, portable evaluation
-export, and optional per-shape CUDA acceleration.
+export, and optional operator-based CUDA acceleration.
 
 The package contains architecture code only. It has no trainer, dataset
 pipeline, loss framework, preprocessing stack, or nnU-Net dependency.
@@ -17,7 +17,7 @@ authoritative research release, and [MONAI](https://github.com/Project-MONAI/MON
 provides a maintained implementation inside a broad medical-imaging framework.
 MedNeXt-Accel focuses on a smaller target: a standalone model package with
 checkpoint interoperability, measured training-memory controls, and optional
-shape-specific CUDA acceleration.
+shape-aware CUDA acceleration.
 
 | Capability | Official MedNeXt v1 | MONAI MedNeXt | MedNeXt-Accel |
 |---|---|---|---|
@@ -190,16 +190,25 @@ model = mednext_base(
 Resolution follows **external policy → exact-SM policy → shared NVIDIA policy →
 reference**. A missing rule continues to the next layer; an explicit
 `implementation: reference` stops that phase for a known counterexample.
-Bundled policies cover SM86, SM89, and SM120 and infer useful choices across
-batch sizes. Unknown NVIDIA SMs receive the shared policy. Selection uses the
-execution device, so moving a model between GPUs selects the appropriate layer.
+Bundled policies cover SM86, SM89, and SM120. Generalized rules match operator
+work and channel ranges, so an unmeasured batch/channel/spatial tuple can use an
+accelerated path without an exact lookup entry. Unknown NVIDIA SMs receive the
+shared policy. Selection uses the execution device, so moving a model between
+GPUs selects the appropriate layer.
 A user policy targeting another SM still applies with a warning. Correctness
 guards remain active, and approximate implementations require explicit opt-in.
 
-Checkpointing and batch size remain your choices. Bundled operator policies
-work independently of checkpoint style; local measured overrides retain their
-campaign context. High-batch SM120 devices retain structurally scaled depthwise
-kernels beyond the RTX 5090 measurements. More VRAM alone does not establish
+The validated generalized domain is CUDA BF16 training with contiguous 3D NCDHW
+inputs, cubic k3 depthwise operators, and regular k1 pointwise operators.
+Unsupported operators, 2D execution, and evaluation/export remain native.
+A custom selection that fails an implementation guard falls through to lower
+policy layers; an explicit reference tombstone stops resolution.
+
+Checkpointing and batch size remain your choices. Bundled and newly generated
+local rules match operators independently of model variant or checkpoint style;
+evidence retains those campaign contexts. High-batch SM120 devices retain
+structurally scaled depthwise kernels beyond the RTX 5090 measurements. More
+VRAM alone does not establish
 that every pointwise GEMM is faster. See the
 [policy format and inference assumptions](docs/optimization.md).
 
@@ -245,9 +254,10 @@ and binary refinement. `memory_fraction` determines how much of total GPU VRAM
 a successful model probe may consume before it is treated as infeasible.
 
 The profiler measures **training only**. It detects the GPU and VRAM, searches
-for the largest feasible batch with isolated subprocesses, profiles kernels
-only at that selected batch, validates candidate forward/backward components,
-and compares the provisional policy's model time and memory. A
+for the largest feasible batch with isolated subprocesses, profiles integrated
+adaptive operators only at that selected batch, validates their output and
+every requested gradient, and compares the provisional policy's model time and
+memory. A
 supplied `batch_search.maximum` is tried first and completes the search in one
 model probe when feasible. Without an upper bound, the profiler uses
 exponential growth followed by binary refinement. Rerun with another
@@ -279,6 +289,13 @@ both output paths under `~/.cache/mednext_accel/profiles/` (or
 - `smXX-local.<timestamp>-<hash>.evidence.json`: immutable environment, campaign,
   ordered batch probes, component errors, timings, memory, and model comparisons.
 
+Dispatch evidence includes the wrapper, policy resolution, autograd, autocast,
+gradient mask, and campaign compile mode. Raw kernel timings remain diagnostics.
+Generated rules interpolate bounded operator regions, with exact reference
+exceptions before broader rules; missing or failed probes leave gaps. CUDA
+Graph replay does not expose complete working memory through allocator peaks,
+so those operator measurements cannot qualify for memory or balanced objectives.
+
 The policy references the exact evidence hash. Evidence is written first, then
 the policy is atomically replaced. A rejected model comparison retains all
 kernel evidence and publishes only exact reference overrides for numerical
@@ -300,7 +317,13 @@ report = model.explain_optimization(
     dtype="bfloat16",
     device="cuda:0",
 )
+for decision in report.decisions:
+    print(decision.disposition, decision.phase, decision.implementation)
 ```
+
+Reports distinguish `custom` accelerated wrappers, `native` wrappers using
+PyTorch, and `unwrapped` convolutions outside the adaptive domain. Output heads,
+residual projections, and 2D convolutions remain visible in the report.
 
 See [optimization and profiling](docs/optimization.md) for the YAML schema,
 Python API, and migration from old JSON profiles; the

@@ -39,6 +39,7 @@ mednext-accel = "mednext_accel.profiling.cli:main"
 [tool.hatch.build]
 exclude = [
   "/.superpowers",
+  "/artifacts",
   "*-local.json",
   "*-local.policy.[yY][aA][mM][lL]",
   "*-local.policy.[yY][mM][lL]",

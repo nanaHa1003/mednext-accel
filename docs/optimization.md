@@ -67,7 +67,9 @@ implementations cover downsample dX, transpose dW, and pointwise training.
 Rules are ordered: the first matching rule containing the requested phase wins.
 Matches include family, direction, role, kernel size, stride, spatial shape,
 input/output channels, dtype, model family/variant, checkpoint context, and
-ranges for batch, spatial volume, work, reduction work, or VRAM.
+ranges for input/output channels, batch, spatial volume, work, reduction work,
+or VRAM. `channels: [in, out]` remains an exact pair; `in_channels` and
+`out_channels` separately accept inclusive numeric ranges.
 `work = batch × spatial_volume × input_channels`;
 `reduction_work = batch × spatial_volume`. An integer means equality;
 `{min: ..., max: ...}` is inclusive and either bound may be omitted. Document
@@ -83,14 +85,17 @@ measured split-count exceptions. Python `round` uses ties-to-even.
 
 ### Layers and reference overrides
 
-After implementation correctness/availability guards, resolution follows:
+Resolution follows these layers, checking implementation guards at each match:
 
 1. External policy supplied by the user.
 2. Bundled policy for the execution SM: `sm86`, `sm89`, or `sm120`.
 3. `shared-nvidia` policy.
 4. Built-in reference implementation.
 
-A missing rule or phase continues to the next layer. An explicit
+A missing rule or phase continues to the next layer. A matching custom rule that
+fails a hard implementation guard also continues to the next layer. It does
+not try later rules in the same layer. If no lower layer supplies an executable
+choice, the report retains the highest-priority guard diagnostic. An explicit
 `implementation: reference` is a **tombstone**: it stops lower-priority rules for
 that matched phase. Policies have no blanket defaults. This rule can precede
 positive rules to retain native dW for a known losing region:
@@ -119,8 +124,11 @@ freeze the wrong architecture layer.
 Hard guards cover device/backend availability, dtype, geometry, evaluation,
 export, approximation permission, and launch parameters. Tensor-time checks
 such as contiguity run when inputs exist. Unsupported contexts remain runnable
-through native operators. Bundled depthwise acceleration currently targets
-cubic k3 workloads; larger odd kernels can run through the reference model.
+through native operators. The validated generalized domain is NVIDIA CUDA BF16
+training with contiguous three-dimensional NCDHW inputs, cubic k3 depthwise
+operators, and regular k1 pointwise operators. Other dtypes use native execution
+under bundled policies; larger kernels, unsupported layouts/geometries, and
+two-dimensional models retain native execution where acceleration is unavailable.
 
 ### Inference assumptions and confidence
 
@@ -139,13 +147,25 @@ The shared BF16 policy uses these hypotheses across NVIDIA generations:
 | Downsample dX | Supported k3 stride 2, work ≥1,000,000 |
 | Regular dX | Supported k3, work ≥1,500,000 |
 | Transpose dW | Supported k3, reduction work ≥4,096 |
-| Regular dW | 64³/C64 and 32³/C128 at batch ≥1; 8³/C512 when reduction work ≥1,024 |
+| Regular dW | C64–128 with work ≥4,194,304; C512 when reduction work ≥1,024 |
 
 These boundaries extrapolate from operator evidence, not a claim that every
 GPU/shape/batch was measured. Bundled policies do not restrict checkpoint style:
 matching operator geometry can use them with no checkpointing, expansion, whole
-block, or selected stages. A generated local overlay retains its exact measured
-model and checkpoint context.
+block, or selected stages. Newly generated local overlays also match operators,
+not model variants or checkpoint styles. Those contexts remain in evidence for
+reproducibility and whole-model comparisons. Policy-v2 model/checkpoint match
+keys remain readable for compatibility with existing files.
+
+Generalized rules can select an unmeasured combination of batch, channels, and
+spatial dimensions. New depthwise regions are bounded along `work` for dX or
+`reduction_work` for dW. New pointwise regions are bounded in input channels,
+output channels, and reduction work. Duplicate observations from different
+model/checkpoint contexts collapse before synthesis. Positive interpolation does
+not cross an observed loser or a missing-result point; exact negative exceptions
+precede positive regions. One observation never creates an unbounded positive
+range. Existing bundled unbounded rules remain explicit, reviewed same-SM or
+cross-SM hypotheses, rather than newly measured coverage.
 
 [SM86](benchmarks/sm86-profile.md) and [SM89](benchmarks/sm89-profile.md) overlays
 handle conflicting regular-dW results at 128³ and 16³. SM89 batch 9 inherits
@@ -167,11 +187,24 @@ report = model.explain_optimization(
 )
 print(report.policies)
 for decision in report.decisions:
-    print(decision.policy, decision.rule, decision.confidence, decision.parameters)
+    print(decision.disposition, decision.phase, decision.implementation,
+          decision.policy, decision.rule, decision.confidence, decision.parameters)
 ```
 
+The report enumerates adaptive wrappers and native convolutions, including
+output heads, residual projections, and 2D convolutions. Each decision exposes
+one disposition:
+
+| Disposition | Meaning |
+|---|---|
+| `custom` | A wrapped phase resolves to an accelerated implementation |
+| `native` | A wrapped phase resolves to PyTorch, including reference tombstones and guard fallback |
+| `unwrapped` | A convolution is outside the adaptive wrapper domain |
+
 Decisions also expose warnings, guard reasons, and tensor-time execution guards.
-They describe routing, not a latency prediction.
+The allocation-free report cannot observe tensor contiguity or every execution
+guard. It describes routing, not a latency prediction or a guarantee that a
+custom implementation is fastest at every point in a region.
 
 ## Run an optional profiling campaign
 
@@ -206,7 +239,9 @@ Checkpoint values are `none`, `all-expansion`, `whole-block`, or `auto` (all thr
 contexts). The profiler does not choose checkpointing for application code.
 Training/BF16 are the current scope; no `phases` argument is needed. Channel
 counts default to one input and three outputs; `in_channels`, `out_channels`,
-and `dtypes: [bfloat16]` may be stated explicitly in a workload.
+and `dtypes: [bfloat16]` may be stated explicitly in a workload. Unknown workload
+fields are rejected, including unsupported `kernel_size` or `base_channels`
+overrides, so a campaign cannot silently ignore them.
 
 The profiler finds the largest feasible batch under `memory_fraction` of total
 VRAM. An explicit `maximum` is tried first and ends search in one probe if it
@@ -243,6 +278,32 @@ attempts and can increase when failed groups are bisected. Model comparisons and
 batch searches remain workload-specific. The CLI uses `argparse`, with Rich
 only for progress rendering.
 
+### Integrated measurements and dispatch evidence
+
+Each candidate runs through the actual adaptive module interface, including
+policy resolution, custom autograd, BF16 autocast with FP32 trainable parameters,
+the requested dX/dW/dB mask, and the campaign compile mode. Native PyTorch runs
+through the same module-level interface. Output and every requested gradient
+are validated before timing. Unrequested gradients are not computed. Coverage
+includes regular depthwise dX/dW, downsample dX, transpose dW, and pointwise
+training; other phases remain native within an isolated candidate comparison.
+
+`benchmark_kind: integrated_operator` identifies dispatch evidence. Associated
+`raw_kernel_diagnostic` measurements remain useful for kernel analysis, but
+cannot create positive dispatch rules or reference tombstones. Implementation
+and launch parameters identify evidence; comparison seeds exclude those fields
+so competing candidates receive identical tensors. Invalid or losing candidates
+are rejected individually. The fastest qualifying candidate wins for throughput
+and balanced objectives; the lowest-memory qualifying candidate wins for memory.
+
+CUDA Graph replay can hide retained working storage from measured allocator
+peaks. Those operator results retain observed peak scalars but set
+`memory_measured: false`; they cannot qualify for balanced or memory objectives
+or count as measured losers for those objectives. Throughput can use valid
+latency evidence. Use `eager`, `default` without CUDA Graphs, or
+`max-autotune-no-cudagraphs` when memory evidence is required. Resetting peak
+statistics alone does not make replay memory measurements complete.
+
 ### Two outputs and acceptance
 
 The CLI prints both paths. Default directory:
@@ -262,13 +323,14 @@ validation is streamed one component at a time, with FP32 trainable parameters
 under BF16 autocast and a 2% relative-L2 threshold. This reduces **validation
 scratch memory**; it does not reduce candidate runtime training memory.
 
-The provisional overlay contains exact kernel winners plus exact reference
-tombstones for numerical failures and numerically valid objective losers.
+The provisional overlay contains bounded operator winner regions, exact launch
+exceptions, and exact reference tombstones for numerical failures or complete
+measured objective losers when no qualifying candidate wins.
 Infrastructure errors, missing metrics, and validation OOM leave gaps. The
 complete overlay is tested over the same bundled layers used by application
-models. Objective gates differ between isolated kernels and the model:
+models. Objective gates differ between integrated operators and the model:
 
-| Objective | Kernel gate | Model gate |
+| Objective | Integrated operator gate | Model gate |
 |---|---|---|
 | `balanced` | time ≤97%, peak ≤115% of reference | time <100%, peak ≤115% |
 | `throughput` | time <100% | time <100%, peak ≤125% |
@@ -281,6 +343,12 @@ all numerical results and records that remaining bundled fallthrough was **not
 validated by that comparison**. A rejection does not mean every kernel is
 invalid. Whole-model numerical equivalence is explicitly `not-measured`;
 component validation supplies the numerical evidence.
+
+Full-model comparisons are a release sentinel and publication gate for a new
+bundled SM policy. They protect against graph-level regressions even when
+isolated operators win; they are not required at every point in an operator
+grid. A model pass does not establish optimal dispatch or numerical equivalence
+for every generalized shape.
 
 The SHA-256 in YAML covers exact evidence bytes. Evidence is published first
 under a unique filename and never overwritten; the complete policy is then

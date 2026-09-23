@@ -274,11 +274,59 @@ def test_bundled_sm120_launches_and_only_real_exceptions():
         transpose = row["implementation"] == "triton_transpose_split_dw"
         descriptor = op(channels, direction="transpose" if transpose else "regular")
         decision = resolver.resolve(descriptor, context(batch, size, (12, 0)), "backward_weight")
+        # New integrated evidence supersedes the historical positive dispatch,
+        # while the launch recipe itself remains covered by the parameter tests.
+        if not transpose and (
+            (size, channels, batch) in {(16, 256, 1), (16, 256, 2)}
+            or ((size, channels) == (8, 512) and batch <= 19)
+        ):
+            assert decision.implementation == "reference"
+            assert decision.policy == "sm120"
+            continue
         expected = {"dw_block": int(row["dw_block"]), "dw_splits": int(row["dw_splits"])}
         if not transpose and size == 32 and batch in (4, 6):
             expected["dw_splits"] = 4 if batch == 4 else 8
         assert decision.implementation == row["implementation"]
         assert decision.parameters == expected, row
+
+
+@pytest.mark.parametrize(
+    "descriptor,batch,size,phase",
+    [
+        (op(256, direction="downsample"), 1, 16, "backward_input"),
+        (op(256, direction="downsample"), 2, 16, "backward_input"),
+        (op(128, direction="downsample"), 1, 33, "backward_input"),
+        (op(512), 3, 8, "backward_input"),
+        (op(33), 2, 16, "backward_weight"),
+        (op(128), 1, 31, "backward_weight"),
+        (op(128), 1, 33, "backward_weight"),
+        (op(256, direction="transpose"), 1, 17, "backward_weight"),
+        (op(512, 2048, pointwise=True), 3, 8, "training"),
+    ],
+)
+def test_sm120_integrated_counterexamples_stop_generalized_fallthrough(
+    descriptor, batch, size, phase
+):
+    decision = registry().resolve(descriptor, context(batch, size, (12, 0)), phase)
+    assert (decision.implementation, decision.policy, decision.disposition) == (
+        "reference",
+        "sm120",
+        "native",
+    )
+
+
+def test_sm120_integrated_regions_preserve_winners_and_other_sms():
+    resolver = registry()
+    winner = resolver.resolve(op(128), context(1, 32, (12, 0)), "backward_weight")
+    assert winner.implementation == "triton_split_dw"
+    assert winner.parameters == {"dw_block": 1024, "dw_splits": 2}
+    # Mixed repeat results do not establish a negative boundary at this point.
+    for phase in ("backward_input", "backward_weight"):
+        assert resolver.resolve(op(256), context(3, 16, (12, 0)), phase).disposition == "custom"
+    for sm in ((8, 6), (8, 9), (9, 0)):
+        assert resolver.resolve(
+            op(256, direction="downsample"), context(1, 16, sm), "backward_input"
+        ).implementation == "triton_downsample_dx"
 
 
 @pytest.mark.parametrize("checkpointing", ["none", "whole-block"])
