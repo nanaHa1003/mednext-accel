@@ -187,8 +187,15 @@ report = model.explain_optimization(
 )
 print(report.policies)
 for decision in report.decisions:
-    print(decision.disposition, decision.phase, decision.implementation,
-          decision.policy, decision.rule, decision.confidence, decision.parameters)
+    print(
+        decision.disposition,
+        decision.phase,
+        decision.implementation,
+        decision.policy,
+        decision.rule,
+        decision.confidence,
+        decision.parameters,
+    )
 ```
 
 The report enumerates adaptive wrappers and native convolutions, including

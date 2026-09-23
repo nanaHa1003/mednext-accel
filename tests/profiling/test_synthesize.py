@@ -405,9 +405,7 @@ def test_phase_evidence_needs_only_its_requested_gradient(phase, mask):
 
 
 def phase_measurement(phase, mask):
-    item = replace(
-        measured(2, 10.0, 7.0), phase=phase, gradient_mask=mask, candidate_peak_bytes=90
-    )
+    item = replace(measured(2, 10.0, 7.0), phase=phase, gradient_mask=mask, candidate_peak_bytes=90)
     if phase == "training":
         return item
     return replace(

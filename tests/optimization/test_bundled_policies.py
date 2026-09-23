@@ -324,9 +324,12 @@ def test_sm120_integrated_regions_preserve_winners_and_other_sms():
     for phase in ("backward_input", "backward_weight"):
         assert resolver.resolve(op(256), context(3, 16, (12, 0)), phase).disposition == "custom"
     for sm in ((8, 6), (8, 9), (9, 0)):
-        assert resolver.resolve(
-            op(256, direction="downsample"), context(1, 16, sm), "backward_input"
-        ).implementation == "triton_downsample_dx"
+        assert (
+            resolver.resolve(
+                op(256, direction="downsample"), context(1, 16, sm), "backward_input"
+            ).implementation
+            == "triton_downsample_dx"
+        )
 
 
 @pytest.mark.parametrize("checkpointing", ["none", "whole-block"])

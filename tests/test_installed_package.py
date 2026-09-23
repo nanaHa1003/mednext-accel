@@ -30,8 +30,17 @@ def test_distributions_exclude_local_review_scratch_and_cache_files(
         subprocess.run(["git", "add", "."], cwd=project, check=True)
         subprocess.run(
             [
-                "git", "-c", "user.name=Package Test", "-c", "user.email=test@example.invalid",
-                "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "Package fixture",
+                "git",
+                "-c",
+                "user.name=Package Test",
+                "-c",
+                "user.email=test@example.invalid",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "--quiet",
+                "-m",
+                "Package fixture",
             ],
             cwd=project,
             check=True,
