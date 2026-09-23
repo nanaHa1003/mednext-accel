@@ -31,19 +31,16 @@ def measured(batch: int, reference_ms: float, candidate_ms: float) -> Measuremen
     )
 
 
-def test_adjacent_measured_batches_remain_exact_local_rules() -> None:
+def test_adjacent_measured_batches_form_a_bounded_work_region() -> None:
     profile = synthesize_profile(
         [measured(2, 4.0, 3.0), measured(3, 6.0, 4.5), measured(4, 8.0, 6.2)],
         name="test",
         sm=(12, 0),
         objective="balanced",
     )
-    assert len(profile.rules) == 3
-    assert [(rule.when["batch"].minimum, rule.when["batch"].maximum) for rule in profile.rules] == [
-        (2, 2),
-        (3, 3),
-        (4, 4),
-    ]
+    assert len(profile.rules) == 1
+    bound = profile.rules[0].when["reduction_work"]
+    assert (bound.minimum, bound.maximum) == (4194304, 8388608)
     assert profile.rules[0].use["training"].implementation == "pointwise_gemm_per_sample"
 
 
@@ -63,7 +60,7 @@ def test_invalid_candidate_and_memory_objective_choose_safely() -> None:
         "reference",
         "pointwise_gemm_per_sample",
     ]
-    assert profile.rules[1].when["batch"].minimum == 3
+    assert profile.rules[1].when["reduction_work"].minimum == 6291456
 
 
 def test_reported_winner_uses_the_same_balanced_threshold_as_synthesis() -> None:
@@ -100,7 +97,6 @@ def test_invalid_candidate_rejects_only_its_own_selection(selection) -> None:
         {"in_channels": 16},
         {"out_channels": 128},
         {"dtype": "float32"},
-        {"checkpointing": "none"},
     ],
 )
 def test_invalid_rule_match_preserves_distinguishable_candidate(different_match) -> None:
@@ -168,13 +164,14 @@ def test_raw_result_materialization_restores_context_and_uses_planned_identity()
         assert item.candidate_peak_bytes == failed.get("candidate_peak_bytes", 0)
 
 
-def test_single_selected_batch_produces_only_an_exact_batch_rule() -> None:
+def test_single_selected_batch_produces_only_a_bounded_work_rule() -> None:
     profile = synthesize_profile(
         [measured(13, 10.0, 8.0)], name="selected", sm=(12, 0), objective="balanced"
     )
 
     assert len(profile.rules) == 1
-    assert profile.rules[0].when["batch"].minimum == profile.rules[0].when["batch"].maximum == 13
+    work = profile.rules[0].when["reduction_work"]
+    assert work.minimum == work.maximum == 27262976
 
 
 def test_measurement_serializes_probe_and_numerical_diagnostics():
@@ -429,3 +426,205 @@ def test_unrecorded_memory_retains_legacy_verdict_but_cannot_establish_memory_po
     assert (
         synthesize_profile([restored], name="legacy", sm=(12, 0), objective="balanced").rules == ()
     )
+
+
+def test_duplicate_model_and_checkpoint_projections_collapse():
+    original = measured(2, 4.0, 3.0)
+    projections = [
+        replace(
+            original,
+            checkpointing=checkpointing,
+            workload={"model_family": "mednext_v1", "variant": variant},
+        )
+        for checkpointing in ("none", "whole-block")
+        for variant in ("base", "large")
+    ]
+    profile = synthesize_profile(projections, name="projected", sm=(8, 9), objective="balanced")
+    assert len(profile.rules) == 1
+    assert not {"model_family", "variant", "checkpointing"} & profile.rules[0].when.keys()
+    rejected = replace(projections[0], kernel_valid=False)
+    blocked = synthesize_profile(
+        [*projections, rejected], name="projected", sm=(8, 9), objective="balanced"
+    )
+    assert len(blocked.rules) == 1
+    assert blocked.rules[0].use["training"].implementation == "reference"
+
+
+@pytest.mark.parametrize(
+    "phase,implementation,metric,unit",
+    [
+        ("backward_input", "triton_depthwise_dx", "work", 262144),
+        ("backward_weight", "triton_split_dw", "reduction_work", 4096),
+    ],
+)
+@pytest.mark.parametrize("barrier", ["negative", "incomplete"])
+def test_depthwise_intervals_use_auto_recipes_and_stop_at_observed_barriers(
+    phase, implementation, metric, unit, barrier
+):
+    items = [
+        replace(
+            measured(batch, 10.0, 7.0),
+            family="depthwise_conv3d",
+            phase=phase,
+            implementation=implementation,
+            kernel_size=3,
+            spatial_shape=(16,) * 3,
+            in_channels=64,
+            out_channels=64,
+        )
+        for batch in range(1, 6)
+    ]
+    items[2] = (
+        replace(items[2], candidate_ms=12.0)
+        if barrier == "negative"
+        else replace(items[2], kernel_valid=None, probe_status="oom")
+    )
+    profile = synthesize_profile(items, name="segmented", sm=(8, 9), objective="balanced")
+    positives = [rule for rule in profile.rules if rule.use[phase].implementation != "reference"]
+    assert len(positives) == 2
+    assert [(rule.when[metric].minimum, rule.when[metric].maximum) for rule in positives] == [
+        (unit, 2 * unit),
+        (4 * unit, 5 * unit),
+    ]
+    assert all(rule.use[phase].parameters == "auto" for rule in positives)
+    assert all(not {"batch", "channels", "spatial_shape"} & rule.when.keys() for rule in positives)
+    if barrier == "negative":
+        first = profile.rules[0]
+        assert first.use[phase].implementation == "reference"
+        assert first.when["batch"].minimum == first.when["batch"].maximum == 3
+        assert first.when["channels"] == (64, 64)
+        assert first.when["spatial_shape"] == (16, 16, 16)
+    else:
+        assert len(profile.rules) == 2
+
+
+def pointwise_grid():
+    return [
+        replace(
+            measured(batch, 10.0, 7.0), spatial_shape=(8,) * 3, in_channels=cin, out_channels=cout
+        )
+        for cin in (32, 64)
+        for cout in (64, 128)
+        for batch in (2, 4)
+    ]
+
+
+def test_complete_pointwise_grid_forms_one_bounded_channel_and_work_region():
+    from mednext_accel.optimization.policy import policy_to_primitive
+
+    profile = synthesize_profile(pointwise_grid(), name="grid", sm=(8, 9), objective="balanced")
+    assert len(profile.rules) == 1
+    when = policy_to_primitive(profile)["rules"][0]["when"]
+    assert when["in_channels"] == {"min": 32, "max": 64}
+    assert when["out_channels"] == {"min": 64, "max": 128}
+    assert when["reduction_work"] == {"min": 1024, "max": 2048}
+    assert "spatial_shape" not in when and "batch" not in when and "channels" not in when
+    assert (
+        synthesize_profile(
+            list(reversed(pointwise_grid())), name="grid", sm=(8, 9), objective="balanced"
+        )
+        == profile
+    )
+
+
+@pytest.mark.parametrize("missing", ["absent", "oom", "negative"])
+def test_pointwise_rectangles_do_not_fill_incomplete_or_losing_corners(missing):
+    from mednext_accel.optimization.descriptors import ExecutionContext, OperatorDescriptor
+    from mednext_accel.optimization.policy_resolver import PolicyResolver
+
+    items = pointwise_grid()
+    corner = items.pop()
+    if missing != "absent":
+        items.append(
+            replace(corner, probe_status="oom", kernel_valid=None)
+            if missing == "oom"
+            else replace(corner, candidate_ms=12.0)
+        )
+    profile = synthesize_profile(items, name="grid", sm=(8, 9), objective="balanced")
+    op = OperatorDescriptor(
+        "pointwise_conv3d", "regular", 64, 128, (1,) * 3, (1,) * 3, (0,) * 3, (1,) * 3, 1
+    )
+    ctx = ExecutionContext(
+        "training",
+        "cuda",
+        (8, 9),
+        48 * 2**30,
+        "bfloat16",
+        4,
+        (8,) * 3,
+        "mednext_v1",
+        "base",
+        "none",
+    )
+    selected = PolicyResolver(external=profile).resolve(op, ctx, "training")
+    assert selected.implementation == "reference"
+    assert selected.policy == ("grid" if missing == "negative" else "reference")
+    if missing == "negative":
+        assert profile.rules[0].use["training"].implementation == "reference"
+
+
+def test_single_depthwise_observation_does_not_create_unbounded_positive_range():
+    item = replace(
+        measured(2, 10.0, 7.0),
+        family="depthwise_conv3d",
+        phase="backward_input",
+        implementation="triton_depthwise_dx",
+        kernel_size=3,
+        in_channels=64,
+        out_channels=64,
+        spatial_shape=(16,) * 3,
+    )
+    profile = synthesize_profile([item], name="singleton", sm=(8, 9), objective="balanced")
+    assert profile.rules[0].when["work"].minimum == profile.rules[0].when["work"].maximum == 524288
+
+
+def test_conflicting_depthwise_work_projection_keeps_valid_context_exact():
+    winner = replace(
+        measured(2, 10.0, 7.0),
+        family="depthwise_conv3d",
+        phase="backward_input",
+        implementation="triton_depthwise_dx",
+        kernel_size=3,
+        in_channels=64,
+        out_channels=64,
+        spatial_shape=(16,) * 3,
+    )
+    loser = replace(winner, batch=4, in_channels=32, out_channels=32, candidate_ms=12.0)
+    profile = synthesize_profile([winner, loser], name="collision", sm=(8, 9), objective="balanced")
+    assert len(profile.rules) == 2
+    negative, positive = profile.rules
+    assert negative.use["backward_input"].implementation == "reference"
+    assert positive.use["backward_input"].implementation == "triton_depthwise_dx"
+    assert positive.when["channels"] == (64, 64)
+    assert positive.when["batch"].minimum == positive.when["batch"].maximum == 2
+
+
+def test_pointwise_region_resolves_unseen_channels_and_batch_but_respects_bounds():
+    from mednext_accel.optimization.descriptors import ExecutionContext, OperatorDescriptor
+    from mednext_accel.optimization.policy_resolver import PolicyResolver
+
+    profile = synthesize_profile(pointwise_grid(), name="grid", sm=(8, 9), objective="balanced")
+    resolver = PolicyResolver(external=profile)
+    op = OperatorDescriptor(
+        "pointwise_conv3d", "regular", 48, 96, (1,) * 3, (1,) * 3, (0,) * 3, (1,) * 3, 1
+    )
+    ctx = ExecutionContext(
+        "training",
+        "cuda",
+        (8, 9),
+        48 * 2**30,
+        "bfloat16",
+        3,
+        (8,) * 3,
+        "mednext_v1",
+        "large",
+        "whole-block",
+    )
+    assert resolver.resolve(op, ctx, "training").implementation == "pointwise_gemm_per_sample"
+    for descriptor, context in [
+        (replace(op, in_channels=65), ctx),
+        (replace(op, out_channels=129), ctx),
+        (op, replace(ctx, batch_size=5)),
+        (op, replace(ctx, batch_size=1)),
+    ]:
+        assert resolver.resolve(descriptor, context, "training").implementation == "reference"

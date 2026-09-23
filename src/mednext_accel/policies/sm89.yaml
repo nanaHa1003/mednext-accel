@@ -1,6 +1,7 @@
 # L40S dense legacy summary + new B10 kernel evidence. Regular 128^3 dW
 # interpolates B1..10, including B9; 16^3 is bounded B1..8 with an exact B10
 # tombstone (0.649x). No inference crosses that counterexample.
+# Positive dW rows use bounded reduction work at the observed channel scales.
 # The three B10 pointwise winners satisfy balanced time AND memory limits.
 # The two validator OOMs remain gaps. No GPU product identity is claimed.
 version: 2
@@ -19,11 +20,11 @@ rules:
     use: {backward_weight: {implementation: reference}}
     confidence: measured-exact-context
   - id: regular-dw-16-b1-b8
-    when: {family: depthwise_conv3d, direction: regular, kernel_size: [3, 3, 3], spatial_shape: [16, 16, 16], channels: [256, 256], batch: {min: 1, max: 8}}
+    when: {family: depthwise_conv3d, direction: regular, kernel_size: [3, 3, 3], in_channels: 256, reduction_work: {min: 4096, max: 32768}}
     use: {backward_weight: {implementation: triton_split_dw, parameters: auto}}
     confidence: interpolated-bounded
   - id: regular-dw-128-b1-b10
-    when: {family: depthwise_conv3d, direction: regular, kernel_size: [3, 3, 3], spatial_shape: [128, 128, 128], channels: [32, 32], batch: {min: 1, max: 10}}
+    when: {family: depthwise_conv3d, direction: regular, kernel_size: [3, 3, 3], in_channels: 32, reduction_work: {min: 2097152, max: 20971520}}
     use: {backward_weight: {implementation: triton_split_dw, parameters: auto}}
     confidence: interpolated-bounded
   - id: pointwise-b10-1-32-128

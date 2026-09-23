@@ -1,6 +1,7 @@
 # RTX A6000 B12: 128^3 dW loses (0.926x); 16^3 dW wins (1.583x).
 # The loss is a conservative shape-region tombstone; the winner extends upward
-# from B12. These device/batch observations do not isolate SM causality.
+# from B12 as a reviewed hypothesis. C256 uses reduction work so unseen
+# spatial sizes can reuse it. These observations do not isolate SM causality.
 version: 2
 kind: mednext-accel-policy
 name: sm86
@@ -16,6 +17,6 @@ rules:
     use: {backward_weight: {implementation: reference}}
     confidence: inferred-same-sm
   - id: regular-dw-16-b12-up
-    when: {family: depthwise_conv3d, direction: regular, kernel_size: [3, 3, 3], spatial_shape: [16, 16, 16], channels: [256, 256], batch: {min: 12}}
+    when: {family: depthwise_conv3d, direction: regular, kernel_size: [3, 3, 3], in_channels: 256, reduction_work: {min: 49152}}
     use: {backward_weight: {implementation: triton_split_dw, parameters: auto}}
     confidence: inferred-same-sm

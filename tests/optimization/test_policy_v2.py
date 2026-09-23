@@ -51,6 +51,8 @@ def test_scope_normalization_and_immutability():
     "condition,value",
     [
         ("work", 1572864),
+        ("in_channels", 48),
+        ("out_channels", {"min": 32, "max": 128}),
         ("reduction_work", {"min": 4096}),
         ("spatial_volume", {"min": 512, "max": 262144}),
         ("total_vram_gib", {"min": 31.5, "max": 96}),
@@ -239,3 +241,81 @@ def test_loader_rejects_nonmapping_documents_and_factory_modes(tmp_path):
     for mode in ("auto", "reference"):
         with pytest.raises(ValueError, match="factory mode"):
             load_policy(mode)
+
+
+def test_numeric_channels_narrow_scope_and_coexist_with_exact_tombstones():
+    from mednext_accel.optimization.descriptors import ExecutionContext, OperatorDescriptor
+    from mednext_accel.optimization.policy import policy_to_primitive
+    from mednext_accel.optimization.policy_resolver import PolicyResolver
+
+    source = document(scope={"in_channels": {"min": 32, "max": 128}, "out_channels": 64})
+    positive = source["rules"][0]
+    positive["when"] = {"in_channels": {"max": 96}}
+    positive["use"] = {"training": {"implementation": "pointwise_gemm_per_sample"}}
+    source["rules"].insert(
+        0,
+        {
+            "id": "negative",
+            "when": {"channels": [48, 64]},
+            "use": {"training": {"implementation": "reference"}},
+            "confidence": "measured-exact-context",
+        },
+    )
+    policy = parse(source)
+    assert parse(policy_to_primitive(policy)) == policy
+    assert policy.rules[1].when["in_channels"].minimum == 32
+    resolver = PolicyResolver(external=policy)
+    context = ExecutionContext(
+        "training",
+        "cuda",
+        (8, 9),
+        48 * 2**30,
+        "bfloat16",
+        3,
+        (32,) * 3,
+        "mednext_v1",
+        "base",
+        "none",
+    )
+    for channels, expected in [
+        (31, "reference"),
+        (32, "pointwise_gemm_per_sample"),
+        (48, "reference"),
+        (96, "pointwise_gemm_per_sample"),
+        (97, "reference"),
+    ]:
+        op = OperatorDescriptor(
+            "pointwise_conv3d",
+            "regular",
+            channels,
+            64,
+            (1,) * 3,
+            (1,) * 3,
+            (0,) * 3,
+            (1,) * 3,
+            1,
+        )
+        assert resolver.resolve(op, context, "training").implementation == expected
+
+
+@pytest.mark.parametrize(
+    "scope,when",
+    [
+        ({"in_channels": {"min": 32, "max": 64}}, {"in_channels": {"max": 96}}),
+        ({"out_channels": {"min": 32}}, {"out_channels": {"max": 16}}),
+        ({"in_channels": {"min": 32}}, {"channels": [16, 64]}),
+        ({"channels": [32, 64]}, {"out_channels": 32}),
+        ({}, {"channels": [32, 64], "in_channels": 64}),
+    ],
+)
+def test_channel_constraints_cannot_widen_scope_or_contradict_exact_channels(scope, when):
+    source = document(scope=scope)
+    source["rules"][0]["when"] = when
+    with pytest.raises(ValueError, match="scope|contradict"):
+        parse(source)
+
+
+def test_legacy_model_and_checkpoint_conditions_remain_readable():
+    source = document(scope={"model_family": "mednext_v1"})
+    source["rules"][0]["when"].update(variant="base", checkpointing="whole-block")
+    assert parse(source).rules[0].when["checkpointing"] == "whole-block"

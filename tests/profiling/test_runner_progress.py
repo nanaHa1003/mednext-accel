@@ -322,11 +322,8 @@ def test_campaign_shares_groups_and_materializes_each_checkpoint_context(monkeyp
             context = payload["workload"]["checkpointing"]
             validations[context].append(payload["batch"])
             profile = payload["optimization"]
-            assert {r["when"]["checkpointing"] for r in profile["rules"]} == {
-                "none",
-                "all-expansion",
-            }
-            assert len(profile["rules"]) == 10
+            assert all("checkpointing" not in rule["when"] for rule in profile["rules"])
+            assert len(profile["rules"]) == 5
             return {"status": "ok", "step_ms": 8.0, "peak_bytes": 100}
         return _successful_group(payload)
 
@@ -469,7 +466,7 @@ def test_variants_validate_independently_against_their_own_reference(monkeypatch
             )
         )
         assert payload["optimization"]["version"] == 2
-        assert len(payload["optimization"]["rules"]) == 3
+        assert len(payload["optimization"]["rules"]) == 1
         return {"status": "ok", "step_ms": 8.0, "peak_bytes": 100}
 
     monkeypatch.setattr(runner, "_invoke", invoke)
@@ -689,7 +686,9 @@ def test_campaign_profiles_and_validates_only_each_contexts_selected_maximum(mon
         batch = payload["batch"]
         if "optimization" in payload:
             validations[context].append(batch)
-            assert {r["when"]["batch"] for r in payload["optimization"]["rules"]} == {3, 5}
+            rules = payload["optimization"]["rules"]
+            assert len(rules) == 1
+            assert rules[0]["when"]["reduction_work"] == {"min": 6291456, "max": 10485760}
             return {"status": "ok", "step_ms": 8.0, "peak_bytes": 100}
         references[context].append(batch)
         if context == "none" and batch > 3:
@@ -715,10 +714,9 @@ def test_campaign_profiles_and_validates_only_each_contexts_selected_maximum(mon
     ]
     assert run.statistics.whole_model_validation_count == 2
     profile = synthesize_profile(run.measurements, name="final", sm=(8, 9), objective="balanced")
-    assert {(rule.when["batch"].minimum, rule.when["batch"].maximum) for rule in profile.rules} == {
-        (3, 3),
-        (5, 5),
-    }
+    assert len(profile.rules) == 1
+    bound = profile.rules[0].when["reduction_work"]
+    assert (bound.minimum, bound.maximum) == (6291456, 10485760)
 
 
 @pytest.mark.parametrize("metric", ["step_ms", "peak_bytes"])
@@ -749,7 +747,8 @@ def test_all_model_comparisons_execute_the_same_complete_campaign_overlay(monkey
     run = runner.execute_campaign(_campaign_contexts())
     assert len(documents) == 2
     assert documents[0] == documents[1]
-    assert {r["when"]["checkpointing"] for r in documents[0]["rules"]} == {"none", "all-expansion"}
+    assert len(documents[0]["rules"]) == 1
+    assert "checkpointing" not in documents[0]["rules"][0]["when"]
     assert run.model_comparisons[0].effective_policy == run.model_comparisons[1].effective_policy
     assert [layer["name"] for layer in run.model_comparisons[0].effective_policy] == [
         "sm89-local",

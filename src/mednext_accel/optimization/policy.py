@@ -45,7 +45,15 @@ _PHASES = {
 }
 _STRINGS = {"family", "direction", "role", "dtype", "model_family", "variant", "checkpointing"}
 _TUPLES = {"kernel_size": 3, "stride": 3, "spatial_shape": 3, "channels": 2}
-_NUMBERS = {"batch", "spatial_volume", "work", "reduction_work", "total_vram_gib"}
+_NUMBERS = {
+    "batch",
+    "in_channels",
+    "out_channels",
+    "spatial_volume",
+    "work",
+    "reduction_work",
+    "total_vram_gib",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,7 +175,17 @@ def _conditions(value: object, path: str) -> dict[str, Condition]:
             result[name] = _integers(item, _TUPLES[name], location)
         else:
             result[name] = _range(item, location, integer=name != "total_vram_gib")
+    _check_channels(result, path)
     return result
+
+
+def _check_channels(conditions: Mapping[str, Condition], path: str) -> None:
+    channels = conditions.get("channels")
+    if channels is not None:
+        for name, channel in zip(("in_channels", "out_channels"), channels, strict=True):
+            bound = conditions.get(name)
+            if isinstance(bound, NumericRange) and not bound.contains(channel):
+                raise ValueError(f"{path}.{name} contradicts exact channels")
 
 
 def _normalize(scope: Mapping[str, Condition], when: Mapping[str, Condition], path: str) -> dict:
@@ -193,6 +211,7 @@ def _normalize(scope: Mapping[str, Condition], when: Mapping[str, Condition], pa
         elif inherited is not None and inherited != value:
             raise ValueError(f"{path}.{name} contradicts scope")
         result[name] = value
+    _check_channels(result, path)
     return result
 
 

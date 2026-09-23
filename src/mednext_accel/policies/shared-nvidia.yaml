@@ -1,6 +1,7 @@
 # Cross-SM hypotheses, not an exact-batch measurement table. Work boundaries
-# follow the smallest supported legacy observations. B9 and larger batches infer
-# from work, while 128^3/16^3 regular dW remain excluded due counterexamples.
+# follow the smallest supported legacy observations. Reviewed structural rules
+# remain unbounded above. Regular dW interpolates C64..128; C32/C256 stay out
+# of shared dW because of the SM86/SM89 counterexamples.
 # Only the stem is a shared pointwise winner (SM86 B12, SM89 B1/B10, SM120 B2/4/6).
 # Aggregate A6000 policy rejection does not invalidate its kernel evidence.
 # Operator timing applies independently of the model checkpointing policy.
@@ -31,15 +32,11 @@ rules:
     when: {family: depthwise_conv_transpose3d, direction: transpose, kernel_size: [3, 3, 3], reduction_work: {min: 4096}}
     use: {backward_weight: {implementation: triton_transpose_split_dw, parameters: auto}}
     confidence: validated-cross-sm
-  - id: regular-dw-64
-    when: {family: depthwise_conv3d, direction: regular, kernel_size: [3, 3, 3], spatial_shape: [64, 64, 64], channels: [64, 64], batch: {min: 1}}
+  - id: regular-dw-medium
+    when: {family: depthwise_conv3d, direction: regular, kernel_size: [3, 3, 3], in_channels: {min: 64, max: 128}, work: {min: 4194304}}
     use: {backward_weight: {implementation: triton_split_dw, parameters: auto}}
     confidence: validated-cross-sm
-  - id: regular-dw-32
-    when: {family: depthwise_conv3d, direction: regular, kernel_size: [3, 3, 3], spatial_shape: [32, 32, 32], channels: [128, 128], batch: {min: 1}}
-    use: {backward_weight: {implementation: triton_split_dw, parameters: auto}}
-    confidence: validated-cross-sm
-  - id: regular-dw-8
-    when: {family: depthwise_conv3d, direction: regular, kernel_size: [3, 3, 3], spatial_shape: [8, 8, 8], channels: [512, 512], reduction_work: {min: 1024}}
+  - id: regular-dw-small
+    when: {family: depthwise_conv3d, direction: regular, kernel_size: [3, 3, 3], in_channels: 512, reduction_work: {min: 1024}}
     use: {backward_weight: {implementation: triton_split_dw, parameters: auto}}
     confidence: validated-cross-sm

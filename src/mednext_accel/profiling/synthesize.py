@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from math import isfinite
+from math import isfinite, prod
 from typing import Literal
 
+from ..optimization.descriptors import ExecutionContext, OperatorDescriptor
+from ..optimization.parameters import has_parameter_recipe, parameter_defaults
 from ..optimization.policy import OptimizationPolicy, parse_policy
 from .benchmark import normalize_probe_message
 from .evidence import (
@@ -291,7 +293,7 @@ def complete_metrics(item: Measurement, objective: Objective = "balanced") -> bo
 
 
 def measurement_identity(item: Measurement) -> tuple[object, ...]:
-    """The policy match fields; candidate parameters do not constrain matching."""
+    """Operator identity, independent of its model/checkpoint projection."""
     return (
         item.family,
         item.direction,
@@ -301,11 +303,104 @@ def measurement_identity(item: Measurement) -> tuple[object, ...]:
         item.in_channels,
         item.out_channels,
         item.dtype,
-        item.checkpointing,
         item.kernel_size,
-        item.workload.get("model_family"),
-        item.workload.get("variant"),
     )
+
+
+def _operator_conditions(item: Measurement) -> dict[str, object]:
+    return {
+        "family": item.family,
+        "direction": item.direction,
+        "kernel_size": [item.kernel_size] * 3,
+        "stride": [2 if item.direction in ("downsample", "transpose") else 1] * 3,
+        "dtype": item.dtype,
+    }
+
+
+def _exact_conditions(item: Measurement) -> dict[str, object]:
+    return {
+        **_operator_conditions(item),
+        "batch": item.batch,
+        "spatial_shape": list(item.spatial_shape),
+        "channels": [item.in_channels, item.out_channels],
+    }
+
+
+def _uses_default_recipe(item: Measurement, sm: tuple[int, int]) -> bool:
+    """Keep measured launch exceptions exact instead of restoring a failed recipe."""
+    if not item.parameters:
+        return True
+    stride = 1 if item.direction == "regular" else 2
+    descriptor = OperatorDescriptor(
+        item.family,
+        item.direction,
+        item.in_channels,
+        item.out_channels,
+        (item.kernel_size,) * 3,
+        (stride,) * 3,
+        (item.kernel_size // 2,) * 3,
+        (1,) * 3,
+        item.in_channels,
+    )
+    context = ExecutionContext(
+        "training",
+        "cuda",
+        sm,
+        0,
+        item.dtype,
+        item.batch,
+        item.spatial_shape,
+        "",
+        "",
+        "none",
+    )
+    defaults = parameter_defaults(item.implementation, descriptor, context)
+    return all(defaults.get(name) == value for name, value in item.parameters)
+
+
+def _merge_observed_boxes(points):
+    """Merge only full neighboring rectangles of identical winning selections.
+
+    Coordinates are indices in each observed axis. Missing, incomplete, losing,
+    or differently winning corners therefore cannot disappear inside a box.
+    """
+    axes = [sorted({point[axis] for point in points}) for axis in range(len(next(iter(points))))]
+    indices = [{value: index for index, value in enumerate(axis)} for axis in axes]
+    boxes = []
+    for point, selections in sorted(points.items()):
+        if selections[0] is not None and all(value == selections[0] for value in selections):
+            bounds = tuple((indices[i][value], indices[i][value]) for i, value in enumerate(point))
+            boxes.append((bounds, selections[0]))
+    changed = True
+    while changed:
+        changed = False
+        # Start with work, then output/input channels for deterministic strips.
+        for axis in reversed(range(len(axes))):
+            groups = {}
+            for bounds, selection in boxes:
+                key = (selection, bounds[:axis] + bounds[axis + 1 :])
+                groups.setdefault(key, []).append(bounds)
+            merged = []
+            for (selection, _), group in groups.items():
+                group.sort(key=lambda bounds: bounds[axis])
+                previous = group[0]
+                for bounds in group[1:]:
+                    if previous[axis][1] + 1 == bounds[axis][0]:
+                        previous = (
+                            previous[:axis]
+                            + ((previous[axis][0], bounds[axis][1]),)
+                            + previous[axis + 1 :]
+                        )
+                        changed = True
+                    else:
+                        merged.append((previous, selection))
+                        previous = bounds
+                merged.append((previous, selection))
+            boxes = merged
+    return [
+        (tuple((axes[i][low], axes[i][high]) for i, (low, high) in enumerate(bounds)), selection)
+        for bounds, selection in sorted(boxes)
+    ]
 
 
 def synthesize_profile(
@@ -316,19 +411,17 @@ def synthesize_profile(
     objective: Objective,
     include_winners: bool = True,
 ) -> OptimizationPolicy:
-    """Build an exact local overlay; missing observations remain policy gaps.
+    """Build bounded operator regions with exact negatives and launch exceptions.
 
-    Numerical failures and complete objective losers explicitly select reference.
-    A later aggregate rejection removes winners, never the negative evidence.
+    Only integrated evidence dispatches. Unknown outcomes split interpolation
+    without becoming tombstones; suppressed winners retain negative evidence.
     """
     by_match: dict[tuple[object, ...], list[Measurement]] = {}
     for item in measurements:
-        if item.benchmark_kind != "integrated_operator":
-            continue
-        by_match.setdefault(measurement_identity(item), []).append(item)
-    selected = []
-    for items in by_match.values():
-        # A failed observation rejects its recipe, not other candidate recipes.
+        if item.benchmark_kind == "integrated_operator":
+            by_match.setdefault(measurement_identity(item), []).append(item)
+    negatives, exceptions, groups = [], [], {}
+    for _identity, items in sorted(by_match.items()):
         rejected = {
             (item.implementation, tuple(sorted(item.parameters)))
             for item in items
@@ -340,8 +433,8 @@ def synthesize_profile(
             if (item.implementation, tuple(sorted(item.parameters))) not in rejected
             and candidate_wins(item, objective)
         ]
-        if winners and include_winners:
-            winner = min(
+        winner = (
+            min(
                 winners,
                 key=lambda item: (
                     item.candidate_peak_bytes if objective == "memory" else item.candidate_ms,
@@ -349,69 +442,79 @@ def synthesize_profile(
                     tuple(sorted(item.parameters)),
                 ),
             )
-            selected.append((winner, winner.implementation, tuple(sorted(winner.parameters))))
-            continue
-        # Suppressed winners cannot protect against inherited rejected recipes.
-        # Preserve conclusive negative evidence in a negative-only overlay.
-        negative = next(
-            (
-                item
-                for item in items
-                if item.kernel_valid is False
-                or (
-                    item.kernel_valid is True
-                    and complete_metrics(item, objective)
-                    and not candidate_wins(item, objective)
-                )
-            ),
-            None,
+            if winners and include_winners
+            else None
         )
-        if negative is not None:
-            selected.append((negative, "reference", ()))
-    # Stable ordering keeps regenerated policies and effective identities deterministic.
-    selected.sort(
-        key=lambda row: (
-            row[0].family,
-            row[0].direction,
-            row[0].phase,
-            row[0].spatial_shape,
-            row[0].in_channels,
-            row[0].out_channels,
-            row[0].dtype,
-            row[0].checkpointing,
-            row[0].kernel_size,
-            row[0].workload.get("model_family", ""),
-            row[0].workload.get("variant", ""),
-            row[0].batch,
-        )
-    )
+        item = winner or items[0]
+        selection = None
+        if winner is not None:
+            recipe = has_parameter_recipe(winner.implementation)
+            parameters = tuple(sorted(winner.parameters))
+            if recipe and not _uses_default_recipe(winner, sm):
+                exceptions.append((winner, winner.implementation, parameters))
+            else:
+                selection = (winner.implementation, "auto" if recipe else parameters)
+        elif any(
+            observed.kernel_valid is False
+            or (
+                observed.kernel_valid is True
+                and complete_metrics(observed, objective)
+                and not candidate_wins(observed, objective)
+            )
+            for observed in items
+        ):
+            negatives.append((item, "reference", ()))
+        key = (item.family, item.direction, item.phase, item.dtype, item.kernel_size)
+        reduction_work = item.batch * prod(item.spatial_shape)
+        if item.family == "pointwise_conv3d":
+            dimensions = ("in_channels", "out_channels", "reduction_work")
+            point = (item.in_channels, item.out_channels, reduction_work)
+        else:
+            dimensions = ("reduction_work",) if item.phase == "backward_weight" else ("work",)
+            point = (
+                reduction_work
+                if item.phase == "backward_weight"
+                else reduction_work * item.in_channels,
+            )
+        group = groups.setdefault(key, (item, dimensions, {}, []))
+        group[2].setdefault(point, []).append(selection)
+        if selection is not None:
+            group[3].append((item, point, selection))
+
     rules = []
-    for item, implementation, parameters in selected:
-        when = {
-            "family": item.family,
-            "direction": item.direction,
-            "batch": item.batch,
-            "spatial_shape": list(item.spatial_shape),
-            "channels": [item.in_channels, item.out_channels],
-            "kernel_size": [item.kernel_size] * 3,
-            "stride": [2 if item.direction in ("downsample", "transpose") else 1] * 3,
-            "dtype": item.dtype,
-            "checkpointing": item.checkpointing,
-        }
-        for name_key in ("model_family", "variant"):
-            if name_key in item.workload:
-                when[name_key] = item.workload[name_key]
+
+    def append_rule(item, when, implementation, parameters, confidence):
         selection = {"implementation": implementation}
         if parameters:
-            selection["parameters"] = dict(parameters)
+            selection["parameters"] = "auto" if parameters == "auto" else dict(parameters)
         rules.append(
             {
                 "id": f"generated-{len(rules):04d}",
                 "when": when,
                 "use": {item.phase: selection},
-                "confidence": "measured-exact-context",
+                "confidence": confidence,
             }
         )
+
+    # Exact reference selections must precede every generalized positive region.
+    for item, implementation, parameters in negatives + exceptions:
+        append_rule(
+            item, _exact_conditions(item), implementation, parameters, "measured-exact-context"
+        )
+    for item, dimensions, points, winners in groups.values():
+        for winner, point, selection in winners:
+            if any(value != selection for value in points[point]):
+                append_rule(winner, _exact_conditions(winner), *selection, "measured-exact-context")
+        boxes = _merge_observed_boxes(points)
+        for bounds, (implementation, parameters) in boxes:
+            when = _operator_conditions(item)
+            when.update(
+                {
+                    dimension: {"min": low, "max": high}
+                    for dimension, (low, high) in zip(dimensions, bounds, strict=True)
+                }
+            )
+            append_rule(item, when, implementation, parameters, "interpolated-bounded")
     return parse_policy(
         {
             "version": 2,

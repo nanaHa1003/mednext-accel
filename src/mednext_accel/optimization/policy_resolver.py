@@ -44,6 +44,8 @@ def _matches(rule: PolicyRule, descriptor: OperatorDescriptor, context: Executio
         "kernel_size": descriptor.kernel_size,
         "stride": descriptor.stride,
         "channels": (descriptor.in_channels, descriptor.out_channels),
+        "in_channels": descriptor.in_channels,
+        "out_channels": descriptor.out_channels,
         "batch": context.batch_size,
         "spatial_shape": context.spatial_shape,
         "spatial_volume": context.spatial_volume,

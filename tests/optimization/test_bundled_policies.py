@@ -311,3 +311,59 @@ def test_factory_checkpoint_choice_preserves_operator_optimization(style, stages
             module.resolver.resolve(op(128), execution, "backward_weight").implementation
             == "triton_split_dw"
         )
+
+
+@pytest.mark.parametrize("sm", [(8, 6), (8, 9), (12, 0), (9, 0)])
+def test_reviewed_depthwise_regions_cover_unseen_aligned_channels_and_spatial_sizes(sm):
+    decision = registry().resolve(op(96), context(3, 40, sm), "backward_weight")
+    assert decision.implementation == "triton_split_dw"
+    assert decision.policy == ("sm120" if sm == (12, 0) else "shared-nvidia")
+    assert decision.parameters == {"dw_block": 512, "dw_splits": 6}
+
+
+@pytest.mark.parametrize("sm,batch,size", [((8, 6), 12, 20), ((8, 9), 3, 20)])
+def test_sm_specific_depthwise_regions_use_reduction_work(sm, batch, size):
+    assert registry().resolve(
+        op(256), context(batch, size, sm), "backward_weight"
+    ).implementation == ("triton_split_dw")
+
+
+def test_sm120_pointwise_channel_strip_interpolates_b3_and_unseen_spatial_size():
+    resolver = registry()
+    descriptor = op(64, 96, pointwise=True)
+    selected = resolver.resolve(descriptor, context(3, 60, (12, 0)), "training")
+    assert selected.implementation == "pointwise_gemm_per_sample"
+    assert selected.confidence == "interpolated-bounded"
+    for sm, batch, size in [((9, 0), 3, 60), ((12, 0), 1, 64), ((12, 0), 7, 64)]:
+        assert resolver.resolve(
+            descriptor, context(batch, size, sm), "training"
+        ).implementation == ("reference")
+
+
+def test_bundled_generalized_rules_keep_tombstones_and_launch_exceptions_first():
+    resolver = registry()
+    assert (
+        resolver.resolve(op(256), context(10, 16), "backward_weight").implementation == "reference"
+    )
+    assert resolver.resolve(op(32), context(12, 128, (8, 6)), "backward_weight").implementation == (
+        "reference"
+    )
+    for batch, splits in [(4, 4), (6, 8)]:
+        decision = resolver.resolve(op(128), context(batch, 32, (12, 0)), "backward_weight")
+        assert decision.parameters == {"dw_block": 1024, "dw_splits": splits}
+    for policy in resolver.bundled:
+        for rule in policy.rules:
+            assert not {"model_family", "variant", "checkpointing"} & rule.when.keys()
+
+
+def test_sm89_generalized_dw_interval_has_inclusive_reduction_boundaries():
+    resolver = registry()
+    for batch, expected in [(1, "triton_split_dw"), (8, "triton_split_dw"), (9, "reference")]:
+        assert (
+            resolver.resolve(op(256), context(batch, 16), "backward_weight").implementation
+            == expected
+        )
+    # The SM86 extension is a reviewed B12+ hypothesis, unlike a generated singleton.
+    assert resolver.resolve(op(256), context(13, 16, (8, 6)), "backward_weight").implementation == (
+        "triton_split_dw"
+    )

@@ -67,7 +67,7 @@ def test_numerical_failures_and_valid_losers_block_inherited_winner_only_at_exac
     assert selected.implementation == "reference"
     assert selected.policy == "local"
     assert decision(resolve, batch=11).implementation == "pointwise_gemm_per_sample"
-    assert decision(resolve, variant="large").implementation == "pointwise_gemm_per_sample"
+    assert decision(resolve, variant="large").implementation == "reference"
     assert len(policy.rules) == 1
 
 
@@ -98,13 +98,12 @@ def test_numerical_failure_wins_over_conflicting_candidate_without_changing_evid
     assert before == [item.to_primitive() for item in (positive, negative)]
 
 
-def test_generated_rules_match_observed_kernel_geometry_and_model_variant():
+def test_generated_rules_match_operator_geometry_independently_of_model_variant():
     _, policy = resolver([measurement()])
     rule = policy.rules[0]
     assert rule.when["kernel_size"] == (1, 1, 1)
     assert rule.when["stride"] == (1, 1, 1)
-    assert rule.when["model_family"] == "mednext_v1"
-    assert rule.when["variant"] == "base"
+    assert not {"model_family", "variant", "checkpointing"} & rule.when.keys()
 
 
 @pytest.mark.parametrize("include_winners", [True, False])
