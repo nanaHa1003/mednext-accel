@@ -15,7 +15,7 @@ AttemptCallback = Callable[[Literal["scheduled", "completed"], int, int], None]
 
 def case_seed(case: KernelCase, campaign_seed: int) -> int:
     """Derive a stable signed-63-bit seed independently of scheduling/order."""
-    identity = f"mednext-accel-kernel-seed-v1:{campaign_seed}:{case.identifier}"
+    identity = f"mednext-accel-kernel-seed-v1:{campaign_seed}:{case.comparison_identifier}"
     return int.from_bytes(sha256(identity.encode()).digest()[:8], "big") & (2**63 - 1)
 
 

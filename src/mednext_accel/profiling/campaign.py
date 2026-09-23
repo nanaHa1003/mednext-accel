@@ -121,6 +121,14 @@ def load_campaign(source: CampaignSource | None) -> Campaign:
             item = _mapping(raw, f"workloads[{index}]")
             if "phases" in item:
                 raise ValueError("workload phases was removed; profiling measures training only")
+            unknown_fields = sorted(
+                set(item)
+                - {"variant", "spatial", "dtypes", "checkpointing", "in_channels", "out_channels"}
+            )
+            if unknown_fields:
+                raise ValueError(
+                    f"unknown workloads[{index}] field(s): {', '.join(unknown_fields)}"
+                )
             variant = str(item.get("variant", "base"))
             if variant not in _VARIANTS:
                 raise ValueError(f"unknown MedNeXt v1 variant {variant!r}")

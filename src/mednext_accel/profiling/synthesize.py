@@ -289,24 +289,45 @@ def synthesize_profile(
         by_match.setdefault(measurement_identity(item), []).append(item)
     selected = []
     for items in by_match.values():
-        negative = next((item for item in items if item.kernel_valid is False), None)
-        if negative is None:
-            negative = next(
-                (
-                    item
-                    for item in items
-                    if item.kernel_valid is True
+        # A failed observation rejects its recipe, not other candidate recipes.
+        rejected = {
+            (item.implementation, tuple(sorted(item.parameters)))
+            for item in items
+            if item.kernel_valid is False
+        }
+        winners = [
+            item
+            for item in items
+            if (item.implementation, tuple(sorted(item.parameters))) not in rejected
+            and candidate_wins(item, objective)
+        ]
+        if winners:
+            if include_winners:
+                winner = min(
+                    winners,
+                    key=lambda item: (
+                        item.candidate_peak_bytes if objective == "memory" else item.candidate_ms,
+                        item.implementation,
+                        tuple(sorted(item.parameters)),
+                    ),
+                )
+                selected.append((winner, winner.implementation, tuple(sorted(winner.parameters))))
+            continue
+        negative = next(
+            (
+                item
+                for item in items
+                if item.kernel_valid is False
+                or (
+                    item.kernel_valid is True
                     and complete_metrics(item)
                     and not candidate_wins(item, objective)
-                ),
-                None,
-            )
+                )
+            ),
+            None,
+        )
         if negative is not None:
             selected.append((negative, "reference", ()))
-        elif include_winners:
-            winner = next((item for item in items if candidate_wins(item, objective)), None)
-            if winner is not None:
-                selected.append((winner, winner.implementation, winner.parameters))
     # Stable ordering keeps regenerated policies and effective identities deterministic.
     selected.sort(
         key=lambda row: (

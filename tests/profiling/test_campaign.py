@@ -99,3 +99,10 @@ def test_campaign_to_primitive_records_every_expanded_workload() -> None:
 def test_obsolete_phases_are_rejected(source):
     with pytest.raises(ValueError, match="phases.*removed.*training"):
         load_campaign(source)
+
+
+def test_unknown_workload_fields_are_rejected_in_sorted_order() -> None:
+    with pytest.raises(
+        ValueError, match=r"unknown workloads\[1\] field\(s\): base_channels, kernel_size"
+    ):
+        load_campaign({"workloads": [{}, {"kernel_size": 3, "base_channels": 32}]})

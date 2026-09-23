@@ -35,6 +35,15 @@ class KernelCase:
         document = json.dumps(asdict(self.key), sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(document.encode()).hexdigest()[:16]
 
+    @property
+    def comparison_identifier(self) -> str:
+        """Identify shared tensor inputs independently of the candidate recipe."""
+        fields = asdict(self.key)
+        del fields["implementation"]
+        del fields["parameters"]
+        document = json.dumps(fields, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(document.encode()).hexdigest()[:16]
+
 
 @dataclass(frozen=True, slots=True)
 class KernelGroup:

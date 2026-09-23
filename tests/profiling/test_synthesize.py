@@ -73,7 +73,7 @@ def test_reported_winner_uses_the_same_balanced_threshold_as_synthesis() -> None
     "selection",
     [{}, {"implementation": "reference"}, {"parameters": (("tile", 32),)}],
 )
-def test_invalid_rule_match_blocks_other_selections_for_the_same_match(selection) -> None:
+def test_invalid_candidate_rejects_only_its_own_selection(selection) -> None:
     candidate = measured(2, 4.0, 1.0)
     rejected = replace(candidate, kernel_valid=False, **selection)
 
@@ -82,7 +82,8 @@ def test_invalid_rule_match_blocks_other_selections_for_the_same_match(selection
     )
 
     assert len(profile.rules) == 1
-    assert profile.rules[0].use["training"].implementation == "reference"
+    expected = "pointwise_gemm_per_sample" if selection else "reference"
+    assert profile.rules[0].use["training"].implementation == expected
     assert candidate.kernel_valid is True
 
 
@@ -245,3 +246,65 @@ def test_conflicting_policy_contexts_do_not_rewrite_kernel_evidence():
     assert len(profile.rules) == 1
     assert profile.rules[0].use["training"].implementation == "reference"
     assert before == [item.to_primitive() for item in (candidate, rejected)]
+
+
+@pytest.mark.parametrize("objective", ["balanced", "throughput", "memory"])
+def test_winner_ranking_uses_objective_and_is_independent_of_input_order(objective):
+    from itertools import permutations
+
+    fastest = replace(measured(2, 10.0, 7.0), parameters=(("tile", 32),), candidate_peak_bytes=90)
+    smallest = replace(measured(2, 10.0, 9.0), parameters=(("tile", 64),), candidate_peak_bytes=60)
+    loser = replace(measured(2, 10.0, 12.0), parameters=(("tile", 128),))
+    incomplete = replace(measured(2, 10.0, 1.0), parameters=(("tile", 256),), probe_status="oom")
+    expected = {"tile": 64 if objective == "memory" else 32}
+    for items in permutations((fastest, smallest, loser, incomplete)):
+        profile = synthesize_profile(items, name="ranking", sm=(12, 0), objective=objective)
+        assert len(profile.rules) == 1
+        assert profile.rules[0].use["training"].implementation == "pointwise_gemm_per_sample"
+        assert profile.rules[0].use["training"].parameters == expected
+
+
+@pytest.mark.parametrize("objective", ["balanced", "throughput", "memory"])
+def test_exact_ties_use_stable_implementation_and_canonical_parameter_order(objective):
+    from itertools import permutations
+
+    first = replace(
+        measured(2, 10.0, 7.0), candidate_peak_bytes=90, parameters=(("a", 1), ("z", 2))
+    )
+    parameter_alternative = replace(first, parameters=(("z", 1), ("a", 2)))
+    implementation_alternative = replace(first, implementation="triton_depthwise_dx", parameters=())
+    for items in permutations((first, parameter_alternative, implementation_alternative)):
+        profile = synthesize_profile(items, name="ties", sm=(12, 0), objective=objective)
+        selection = profile.rules[0].use["training"]
+        assert selection.implementation == "pointwise_gemm_per_sample"
+        assert selection.parameters == {"a": 1, "z": 2}
+
+
+@pytest.mark.parametrize("objective", ["balanced", "throughput", "memory"])
+def test_all_complete_losers_produce_reference(objective):
+    items = [
+        replace(measured(2, 10.0, 12.0), parameters=(("tile", 32),)),
+        replace(measured(2, 10.0, 13.0), parameters=(("tile", 64),)),
+    ]
+    profile = synthesize_profile(items, name="losers", sm=(12, 0), objective=objective)
+    assert len(profile.rules) == 1
+    assert profile.rules[0].use["training"].implementation == "reference"
+
+
+def test_incomplete_only_alternatives_leave_a_gap():
+    items = [
+        replace(measured(2, 10.0, 1.0), probe_status="oom", kernel_valid=None),
+        replace(measured(2, 10.0, 1.0), probe_status="timeout", parameters=(("tile", 32),)),
+        replace(measured(2, 10.0, 0.0), parameters=(("tile", 64),)),
+    ]
+    profile = synthesize_profile(items, name="gaps", sm=(12, 0), objective="balanced")
+    assert profile.rules == ()
+
+
+def test_aggregate_rejection_does_not_turn_valid_winner_into_reference():
+    winner = measured(2, 10.0, 7.0)
+    loser = replace(winner, candidate_ms=12.0, parameters=(("tile", 32),))
+    profile = synthesize_profile(
+        [winner, loser], name="aggregate", sm=(12, 0), objective="balanced", include_winners=False
+    )
+    assert profile.rules == ()

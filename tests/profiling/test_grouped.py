@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import pytest
 
 from mednext_accel.profiling.grouped import case_payload, run_group_with_bisection
@@ -170,3 +172,39 @@ def test_case_seeds_are_stable_across_order_bisection_and_failures():
     assert all(
         case_payload(case, seed=38)["seed"] != seed for case, seed in zip(cases, seeds, strict=True)
     )
+
+
+@pytest.mark.parametrize(
+    "alternative", [{"implementation": "reference"}, {"parameters": (("tile", 32),)}]
+)
+def test_candidate_alternatives_share_inputs_but_keep_distinct_response_ids(alternative):
+    case = make_case(16)
+    other = KernelCase(replace(case.key, **alternative))
+    assert case_payload(case, seed=37)["seed"] == case_payload(other, seed=37)["seed"]
+    assert case.comparison_identifier == other.comparison_identifier
+    assert case.identifier != other.identifier
+    results = run_group_with_bisection(
+        KernelGroup("pointwise", 1, (case, other)), ok_results, seed=37
+    )
+    assert set(results) == {case.identifier, other.identifier}
+
+
+@pytest.mark.parametrize(
+    "context",
+    [
+        {"spatial_shape": (8, 16, 16)},
+        {"in_channels": 16},
+        {"out_channels": 32},
+        {"kernel_size": 3},
+        {"phase": "backward_input"},
+        {"dtype": "float32"},
+        {"batch": 2},
+        {"family": "depthwise_conv3d"},
+        {"direction": "downsample"},
+    ],
+)
+def test_different_comparison_contexts_receive_distinct_inputs(context):
+    case = make_case(16)
+    other = KernelCase(replace(case.key, **context))
+    assert case_payload(case, seed=37)["seed"] != case_payload(other, seed=37)["seed"]
+    assert case.comparison_identifier != other.comparison_identifier
