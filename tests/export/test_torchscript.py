@@ -39,3 +39,19 @@ def test_trace_helper_returns_loadable_module() -> None:
     traced = trace(model, example)
 
     torch.testing.assert_close(traced(example), model(example), rtol=0, atol=0)
+
+
+def test_v2_direct_trace_save_load_matches_eager_without_grn_backend(
+    no_v2_grn_backend, reduced_v2_export_model, v2_export_example, tmp_path
+) -> None:
+    traced = torch.jit.trace(reduced_v2_export_model, v2_export_example)
+    path = tmp_path / "mednext-v2.pt"
+    torch.jit.save(traced, path)
+    restored = torch.jit.load(path)
+
+    with torch.no_grad():
+        eager = reduced_v2_export_model(v2_export_example)
+        traced_output = traced(v2_export_example)
+        restored_output = restored(v2_export_example)
+    torch.testing.assert_close(traced_output, eager, rtol=0, atol=0)
+    torch.testing.assert_close(restored_output, eager, rtol=0, atol=0)

@@ -4,6 +4,12 @@ MedNeXt-Accel models use ordinary PyTorch operations during evaluation. Call
 `model.eval()` before tracing or export. Deep supervision does not change the
 evaluation signature: exported models always return one primary logits tensor.
 
+MedNeXt v2 Base and Wide use the same evaluation export contract. Their public
+factories default to `optimization="auto"`, while evaluation keeps GRN on the
+reference PyTorch implementation and does not import its optional Triton
+backend. For example, `mednext_v2_base(in_channels=1, out_channels=3).eval()`
+can be exported by every method below.
+
 ## TorchScript trace
 
 Direct tracing and the convenience helper are both supported:
@@ -53,10 +59,13 @@ implementations need not be bit exact.
 
 ## Verification scope
 
-Export regression tests use a Small model at 32³ with reduced base channels on
-CPU: direct trace/save/load and strict `torch.export` match eager FP32 exactly;
-ONNX checker and ONNX Runtime use the tolerances above. These checks exercise
-the evaluation path of the default optimized factory and require no custom
-MedNeXt operators in the exported graph. They do not establish training export,
-`jit.script`, every dynamic-shape constraint, or equivalence across all ONNX
-execution providers. The ONNX suite requires the optional export dependencies.
+Export regression tests use a v1 Small model and a reduced v2 Base factory at
+32³ on CPU. The v2 fixture follows the public factory's default
+`optimization="auto"` setup, but uses two base channels and one block per stage
+to keep the test practical. Direct trace/save/load and strict `torch.export`
+match eager FP32 exactly; ONNX checker and ONNX Runtime use the tolerances
+above. The v2 checks also fail if evaluation tries to import the optional Triton
+GRN backend, and `torch.export` contains no MedNeXt or Triton graph targets.
+They do not establish training export, `jit.script`, every dynamic-shape
+constraint, or equivalence across all ONNX execution providers. The ONNX suite
+requires the optional export dependencies.
