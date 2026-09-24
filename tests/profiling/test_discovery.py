@@ -58,6 +58,17 @@ def test_v2_base_and_wide_discover_unique_grn_channel_spatial_shapes():
     assert base.pointwise and base.depthwise
 
 
+def test_v2_discovery_supports_single_voxel_bottleneck_workloads():
+    from mednext_accel.profiling.campaign import Workload
+    from mednext_accel.profiling.runner import discover_workload_shapes
+
+    shapes = discover_workload_shapes(Workload("mednext_v2", "base", (16, 16, 16)))
+
+    assert shapes.pointwise
+    assert shapes.depthwise
+    assert (4096, (1, 1, 1)) in shapes.grn
+
+
 def test_v2_discovery_retains_all_repeated_block_grn_roles():
     from mednext_accel.profiling.campaign import Workload
     from mednext_accel.profiling.runner import _meta_model

@@ -551,6 +551,15 @@ def _meta_model(workload: Workload):
         ).eval()
 
 
+def _discovery_batch_size(workload: Workload) -> int:
+    """Use the smallest batch for which the model's meta forward is valid."""
+
+    bottleneck_shape = tuple((size + 15) // 16 for size in workload.spatial)
+    if workload.family == "mednext_v2" and all(size == 1 for size in bottleneck_shape):
+        return 2
+    return 1
+
+
 def _pointwise_shapes(workload: Workload) -> tuple[tuple[int, int, tuple[int, int, int]], ...]:
     """Return unique MedNeXt pointwise shapes from a meta-tensor pass."""
 
@@ -574,7 +583,14 @@ def _pointwise_shapes(workload: Workload) -> tuple[tuple[int, int, tuple[int, in
                 )
             )
     with torch.no_grad():
-        model(torch.empty(1, workload.in_channels, *workload.spatial, device="meta"))
+        model(
+            torch.empty(
+                _discovery_batch_size(workload),
+                workload.in_channels,
+                *workload.spatial,
+                device="meta",
+            )
+        )
     for hook in hooks:
         hook.remove()
     return tuple(sorted(found))
@@ -614,7 +630,14 @@ def _depthwise_shapes(
                 )
             )
     with torch.no_grad():
-        model(torch.empty(1, workload.in_channels, *workload.spatial, device="meta"))
+        model(
+            torch.empty(
+                _discovery_batch_size(workload),
+                workload.in_channels,
+                *workload.spatial,
+                device="meta",
+            )
+        )
     for hook in hooks:
         hook.remove()
     return tuple(sorted(found))
@@ -640,7 +663,14 @@ def _grn_shapes(workload: Workload) -> tuple[tuple[int, tuple[int, int, int]], .
     ]
     try:
         with torch.no_grad():
-            model(torch.empty(1, workload.in_channels, *workload.spatial, device="meta"))
+            model(
+                torch.empty(
+                    _discovery_batch_size(workload),
+                    workload.in_channels,
+                    *workload.spatial,
+                    device="meta",
+                )
+            )
     finally:
         for hook in hooks:
             hook.remove()
