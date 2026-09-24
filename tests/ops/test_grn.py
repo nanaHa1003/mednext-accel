@@ -38,12 +38,11 @@ def test_reference_grn_uses_channel_sum_and_zero_subgradient() -> None:
 
 
 def test_reference_grn_gradcheck() -> None:
-    module = GlobalResponseNorm3d(3).double()
-    module.gamma.data.normal_()
-    module.beta.data.normal_()
     x = torch.randn(2, 3, 2, 3, 4, dtype=torch.double, requires_grad=True)
+    gamma = torch.randn(1, 3, 1, 1, 1, dtype=torch.double, requires_grad=True)
+    beta = torch.randn(1, 3, 1, 1, 1, dtype=torch.double, requires_grad=True)
 
-    assert torch.autograd.gradcheck(module, (x,))
+    assert torch.autograd.gradcheck(global_response_norm3d_reference, (x, gamma, beta))
 
 
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])

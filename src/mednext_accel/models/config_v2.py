@@ -14,6 +14,11 @@ _UPSAMPLE_EXPANSION_RATIOS = (8, 8, 4, 3)
 _BASE_CHANNELS: dict[MedNeXtV2Variant, int] = {"base": 32, "wide": 64}
 
 
+def _validate_positive_integer_entries(name: str, values: tuple[object, ...]) -> None:
+    if any(type(value) is not int or value <= 0 for value in values):
+        raise ValueError(f"{name} entries must be positive integers")
+
+
 @dataclass(frozen=True, slots=True)
 class MedNeXtV2Config:
     """Complete, YAML-friendly description of a MedNeXt v2 architecture."""
@@ -55,6 +60,13 @@ class MedNeXtV2Config:
             raise ValueError("MedNeXt v2 requires nine block stages")
         if len(self.downsample_expansion_ratios) != 4 or len(self.upsample_expansion_ratios) != 4:
             raise ValueError("MedNeXt v2 requires four downsample and upsample expansion ratios")
+        for name in (
+            "block_counts",
+            "expansion_ratios",
+            "downsample_expansion_ratios",
+            "upsample_expansion_ratios",
+        ):
+            _validate_positive_integer_entries(name, getattr(self, name))
 
 
 def get_mednext_v2_config(

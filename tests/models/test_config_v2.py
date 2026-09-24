@@ -75,6 +75,38 @@ def test_v2_config_rejects_invalid_schema(kwargs: dict[str, object]) -> None:
         MedNeXtV2Config(**values)  # type: ignore[arg-type]
 
 
+@pytest.mark.parametrize(
+    "field,length",
+    [
+        ("block_counts", 9),
+        ("expansion_ratios", 9),
+        ("downsample_expansion_ratios", 4),
+        ("upsample_expansion_ratios", 4),
+    ],
+)
+@pytest.mark.parametrize("invalid", [0, -1, 1.5, True, False, "2"])
+def test_v2_config_rejects_nonpositive_or_noninteger_sequence_entries(
+    field: str, length: int, invalid: object
+) -> None:
+    values: dict[str, object] = {
+        "variant": "base",
+        "in_channels": 1,
+        "out_channels": 3,
+        "base_channels": 32,
+        "kernel_size": 3,
+        "block_counts": [3] * 9,
+        "expansion_ratios": [3] * 9,
+        "downsample_expansion_ratios": [4] * 4,
+        "upsample_expansion_ratios": [4] * 4,
+    }
+    entries = [2] * length
+    entries[length // 2] = invalid
+    values[field] = entries
+
+    with pytest.raises(ValueError, match=field):
+        MedNeXtV2Config(**values)  # type: ignore[arg-type]
+
+
 def test_v2_config_rejects_unknown_variant() -> None:
     with pytest.raises(ValueError, match="variant"):
         get_mednext_v2_config("large", in_channels=1, out_channels=3)

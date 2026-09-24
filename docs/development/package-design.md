@@ -1,10 +1,10 @@
 # MedNeXt-Accel package design
 
 MedNeXt-Accel is an architecture-only PyTorch package. It provides official and
-MONAI-compatible MedNeXt v1 models, checkpoint conversion, explicit activation
-checkpointing, portable evaluation export, and policy-driven CUDA execution.
-Datasets, trainers, losses, preprocessing, and nnU-Net workflows stay outside
-the package.
+MONAI-compatible MedNeXt v1 models, MedNeXt v2 Base and Wide models, checkpoint
+conversion for v1, explicit activation checkpointing, portable evaluation
+export, and policy-driven CUDA execution. Datasets, trainers, losses,
+preprocessing, and nnU-Net workflows stay outside the package.
 
 Public Small/Base/Medium/Large factories default to `optimization="auto"`;
 `optimization="reference"` selects native PyTorch, and a policy-v2 YAML path or
@@ -64,12 +64,19 @@ branches so `jit.trace`, strict `torch.export`, and ONNX graphs contain no custo
 MedNeXt operators. Neither construction nor first forward benchmarks or writes
 files.
 
+MedNeXt v2 is exposed through `mednext_v2_base` and `mednext_v2_wide`. Its GRN
+operator has a native PyTorch reference path and an optional
+`triton_fused_grn` training implementation. The fused implementation remains
+evidence-gated: this release has no bundled performance rule selecting it until
+a profiling campaign passes numerical validation and complete-model acceptance.
+This states the dispatch status only; no MedNeXt v2 performance result is
+claimed here.
+
 Tests, benchmarks, tools, docs, traces, compiler caches, and Nsight captures are
 outside the wheel. Generated local policy/evidence files are excluded from Git
-and distribution archives; bundled YAML is shipped. MedNeXt v2 remains future
-work in a separate model module. The operator/phase registry provides a place
-for additional implementations such as GRN, but this release implements no v2
-model or fused GRN kernel.
+and distribution archives; bundled YAML is shipped. The v1 and v2 model families
+use separate modules while sharing the operator/phase registry and policy
+machinery.
 
 Release verification covers CPU forward/backward, state-dict identity, official
 and MONAI conversion, checkpoint modes, direct `jit.trace`, strict

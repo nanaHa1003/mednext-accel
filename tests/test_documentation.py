@@ -70,6 +70,16 @@ def test_readme_documents_the_v2_public_contract() -> None:
     assert "No MedNeXt v2 performance result is published yet" in content
 
 
+def test_package_design_describes_v2_as_evidence_gated_current_functionality() -> None:
+    content = (_REPOSITORY / "docs/development/package-design.md").read_text()
+
+    assert "MedNeXt v2 remains future work" not in content
+    assert "implements no v2 model or fused GRN kernel" not in content
+    assert "mednext_v2_base" in content
+    assert "triton_fused_grn" in content
+    assert "no bundled performance rule" in content
+
+
 def test_grn_documentation_uses_the_channel_sum_formula() -> None:
     content = (_REPOSITORY / "docs/benchmarks/activation-memory.md").read_text()
 
