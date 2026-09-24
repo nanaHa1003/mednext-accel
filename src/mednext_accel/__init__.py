@@ -14,6 +14,7 @@ from .models import (
 from .optimization import OptimizationPolicy, OptimizationReport, PolicyDecision, load_policy
 
 __all__ = [
+    "__version__",
     "CheckpointConfig",
     "MedNeXtV1",
     "MedNeXtV1Config",
@@ -29,4 +30,7 @@ __all__ = [
     "load_policy",
 ]
 
-__version__ = "0.1.0a0"
+try:
+    from ._version import __version__
+except ModuleNotFoundError:
+    __version__ = "0+unknown"

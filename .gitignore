@@ -21,6 +21,7 @@ dist/
 *.egg-info/
 *.whl
 *.tar.gz
+src/mednext_accel/_version.py
 
 # Profiling, benchmark, and compiler artifacts
 profile_results/

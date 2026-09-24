@@ -7,6 +7,7 @@ import sys
 import tarfile
 import venv
 import zipfile
+from email.parser import BytesParser
 from pathlib import Path
 
 import pytest
@@ -45,6 +46,7 @@ def test_distributions_exclude_local_review_scratch_and_cache_files(
             cwd=project,
             check=True,
         )
+        subprocess.run(["git", "tag", "v0.2.0"], cwd=project, check=True)
         worktree = project / ".worktrees" / "archive"
         subprocess.run(
             ["git", "worktree", "add", "--quiet", "--detach", str(worktree)],
@@ -88,6 +90,9 @@ def test_distributions_exclude_local_review_scratch_and_cache_files(
         sdist_names = archive.getnames()
     with zipfile.ZipFile(next(output.glob("*.whl"))) as archive:
         wheel_names = archive.namelist()
+        metadata_name = next(name for name in wheel_names if name.endswith(".dist-info/METADATA"))
+        built_version = BytesParser().parsebytes(archive.read(metadata_name))["Version"]
+    assert built_version == ("0.2.0" if checkout == "worktree" else "0+unknown")
     for names in (sdist_names, wheel_names):
         assert any(name.endswith("mednext_accel/__init__.py") for name in names)
         for profile in ("shared-nvidia", "sm86", "sm89", "sm120"):
@@ -125,6 +130,7 @@ def test_wheel_installs_and_runs_outside_source_tree(tmp_path: Path) -> None:
     subprocess.run(
         [sys.executable, "-m", "build", "--wheel", "--outdir", str(wheel_dir)],
         cwd=repository,
+        env={**os.environ, "SETUPTOOLS_SCM_PRETEND_VERSION": "0.2.0"},
         check=True,
     )
     wheel = next(wheel_dir.glob("mednext_accel-*.whl"))
@@ -138,8 +144,10 @@ def test_wheel_installs_and_runs_outside_source_tree(tmp_path: Path) -> None:
     program = """
 import torch
 import mednext_accel
+from importlib.metadata import version
 from mednext_accel.optimization.policies import load_bundled_policy
 
+assert mednext_accel.__version__ == version("mednext-accel") == "0.2.0"
 assert load_bundled_policy("sm89").target_sm == (8, 9)
 assert load_bundled_policy("shared-nvidia").rules
 model = mednext_accel.mednext_small(in_channels=1, out_channels=3).eval()

@@ -357,6 +357,14 @@ CUDA kernel correctness and performance tests require a local NVIDIA GPU; run
 the complete suite with `python -m pytest -q` after installing the
 `accelerated`, `export`, and `monai` extras.
 
+## Versioning
+
+Package versions are derived from Git tags through `hatch-vcs`. Release tags use
+the `vMAJOR.MINOR.PATCH` form; for example, `v0.2.0` builds package version
+`0.2.0`. Untagged commits receive a PEP 440 development version automatically;
+source trees without Git metadata report `0+unknown` rather than impersonating a
+release.
+
 ## Attribution
 
 The architecture follows the official
