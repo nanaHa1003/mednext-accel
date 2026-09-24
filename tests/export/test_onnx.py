@@ -42,9 +42,7 @@ def test_v2_onnx_checker_and_runtime_match_eager_without_grn_backend(
         program.model_proto.SerializeToString(),
         providers=["CPUExecutionProvider"],
     )
-    actual = session.run(
-        None, {session.get_inputs()[0].name: v2_export_example.numpy()}
-    )[0]
+    actual = session.run(None, {session.get_inputs()[0].name: v2_export_example.numpy()})[0]
 
     with torch.no_grad():
         expected = reduced_v2_export_model(v2_export_example).numpy()

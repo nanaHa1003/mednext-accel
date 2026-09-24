@@ -281,9 +281,7 @@ def test_geometry_condition_does_not_match_normalization_descriptor():
 
 def test_eligibility_is_registered_instead_of_inferred_from_triton_prefix():
     registry = ImplementationRegistry()
-    norm_descriptor = OperatorDescriptor.normalization(
-        family="global_response_norm3d", channels=96
-    )
+    norm_descriptor = OperatorDescriptor.normalization(family="global_response_norm3d", channels=96)
     registry.register(
         ImplementationSpec(
             "triton_test_norm",

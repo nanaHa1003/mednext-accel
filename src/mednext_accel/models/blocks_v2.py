@@ -83,9 +83,7 @@ class MedNeXtV2DownBlock(MedNeXtV2Block):
             groups=in_channels,
         )
         self.residual = (
-            nn.Conv3d(in_channels, out_channels, kernel_size=1, stride=2)
-            if residual
-            else None
+            nn.Conv3d(in_channels, out_channels, kernel_size=1, stride=2) if residual else None
         )
 
     def forward(self, x: Tensor) -> Tensor:

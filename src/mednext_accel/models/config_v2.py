@@ -53,10 +53,7 @@ class MedNeXtV2Config:
             raise ValueError("MedNeXt v2 kernel_size must be 3")
         if len(self.block_counts) != 9 or len(self.expansion_ratios) != 9:
             raise ValueError("MedNeXt v2 requires nine block stages")
-        if (
-            len(self.downsample_expansion_ratios) != 4
-            or len(self.upsample_expansion_ratios) != 4
-        ):
+        if len(self.downsample_expansion_ratios) != 4 or len(self.upsample_expansion_ratios) != 4:
             raise ValueError("MedNeXt v2 requires four downsample and upsample expansion ratios")
 
 
@@ -71,9 +68,7 @@ def get_mednext_v2_config(
 
     normalized = variant.lower()
     if normalized not in _BASE_CHANNELS:
-        raise ValueError(
-            f"unknown MedNeXt v2 variant {variant!r}; expected 'base' or 'wide'"
-        )
+        raise ValueError(f"unknown MedNeXt v2 variant {variant!r}; expected 'base' or 'wide'")
 
     typed_variant = normalized  # narrowed by the membership check above
     return MedNeXtV2Config(

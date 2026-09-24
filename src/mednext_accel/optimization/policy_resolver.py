@@ -58,8 +58,7 @@ def _matches(rule: PolicyRule, descriptor: OperatorDescriptor, context: Executio
         "checkpointing": context.checkpointing,
     }
     return all(
-        facts.get(name) is not None
-        and expected.contains(facts[name])
+        facts.get(name) is not None and expected.contains(facts[name])
         if isinstance(expected, NumericRange)
         else facts.get(name) is not None and expected == facts[name]
         for name, expected in rule.when.items()

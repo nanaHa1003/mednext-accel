@@ -50,9 +50,7 @@ class OperatorDescriptor:
             raise ValueError("groups must be positive")
         object.__setattr__(self, "kernel_size", _spatial_tuple(self.kernel_size, "kernel_size"))
         object.__setattr__(self, "stride", _spatial_tuple(self.stride, "stride"))
-        object.__setattr__(
-            self, "padding", _spatial_tuple(self.padding, "padding", positive=False)
-        )
+        object.__setattr__(self, "padding", _spatial_tuple(self.padding, "padding", positive=False))
         object.__setattr__(self, "dilation", _spatial_tuple(self.dilation, "dilation"))
 
     @classmethod
