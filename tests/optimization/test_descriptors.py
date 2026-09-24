@@ -19,6 +19,32 @@ def test_descriptor_has_a_stable_primitive_identity() -> None:
     assert descriptor.signature == ("depthwise_conv3d", "regular", 32, 32, (3, 3, 3), (1, 1, 1))
 
 
+def test_positional_convolution_descriptor_retains_legacy_primitive_shape() -> None:
+    descriptor = OperatorDescriptor(
+        "depthwise_conv3d",
+        "regular",
+        32,
+        32,
+        (3, 3, 3),
+        (1, 1, 1),
+        (1, 1, 1),
+        (1, 1, 1),
+        32,
+    )
+    assert descriptor.to_primitive() == {
+        "family": "depthwise_conv3d",
+        "direction": "regular",
+        "in_channels": 32,
+        "out_channels": 32,
+        "kernel_size": [3, 3, 3],
+        "stride": [1, 1, 1],
+        "padding": [1, 1, 1],
+        "dilation": [1, 1, 1],
+        "groups": 32,
+        "role": None,
+    }
+
+
 def test_normalization_descriptor_has_no_fake_convolution_geometry() -> None:
     item = OperatorDescriptor.normalization(
         family="global_response_norm3d", channels=96, role="encoder_stages.0.0.grn"

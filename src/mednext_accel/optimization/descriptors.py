@@ -105,6 +105,8 @@ class OperatorDescriptor:
         for name in ("kernel_size", "stride", "padding", "dilation"):
             if value[name] is not None:
                 value[name] = list(value[name])
+        if self.kernel_size is not None:
+            return value
         return {name: item for name, item in value.items() if item is not None}
 
 

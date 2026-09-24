@@ -54,18 +54,8 @@ def _descriptor(module: nn.Module, role: str) -> OperatorDescriptor | None:
             role,
         )
     if isinstance(module, nn.GroupNorm):
-        channels = module.num_channels
-        return OperatorDescriptor(
-            "group_norm",
-            "forward",
-            channels,
-            channels,
-            (1, 1, 1),
-            (1, 1, 1),
-            (0, 0, 0),
-            (1, 1, 1),
-            module.num_groups,
-            role,
+        return OperatorDescriptor.normalization(
+            family="group_norm", channels=module.num_channels, role=role
         )
     if isinstance(module, (nn.GELU, EvalModeGELU)):
         return OperatorDescriptor(
