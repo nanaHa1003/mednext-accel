@@ -55,7 +55,7 @@ class Measurement:
     objective: str | None = None
     failure_stage: str | None = None
     seed: int | None = None
-    kernel_size: int = 1
+    kernel_size: int | None = 1
     workload: Mapping[str, object] = field(default_factory=dict)
     validator: str | None = None
     validation_metrics: Mapping[str, Mapping[str, float | bool | None]] = field(
@@ -68,6 +68,12 @@ class Measurement:
     raw_diagnostic: Mapping[str, object] = field(default_factory=dict)
     # None preserves older evidence whose memory accounting was not recorded.
     memory_measured: bool | None = None
+    # Requested-output diagnostics share backward work and are not additive phases.
+    forward_ms: Mapping[str, float] = field(default_factory=dict)
+    dx_ms: Mapping[str, float] = field(default_factory=dict)
+    dgamma_ms: Mapping[str, float] = field(default_factory=dict)
+    dbeta_ms: Mapping[str, float] = field(default_factory=dict)
+    component_peak_bytes: Mapping[str, Mapping[str, int]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.benchmark_kind not in ("raw_kernel_diagnostic", "integrated_operator"):
@@ -98,8 +104,51 @@ class Measurement:
             require_string(getattr(self, name), name)
         for name in ("probe_message", "failure_stage", "validator", "rejection_reason"):
             require_string(getattr(self, name), name, nullable=True)
-        for name in ("batch", "in_channels", "out_channels", "kernel_size"):
+        for name in ("batch", "in_channels", "out_channels"):
             require_int(getattr(self, name), name, minimum=1)
+        if self.family == "global_response_norm3d":
+            if self.kernel_size is not None:
+                raise ValueError("GRN kernel_size must be None")
+            if self.phase != "training" or self.direction != "regular":
+                raise ValueError("GRN evidence requires regular direction and combined training")
+            if self.in_channels != self.out_channels or self.parameters:
+                raise ValueError("GRN requires equal channels and no launch parameters")
+            if self.kernel_valid is True and set(self.validation_metrics) != {
+                "output",
+                "dX",
+                "dGamma",
+                "dBeta",
+            }:
+                raise ValueError("GRN requires output and all three gradient validation metrics")
+        else:
+            require_int(self.kernel_size, "kernel_size", minimum=1)
+        successful_grn = self.family == "global_response_norm3d" and self.probe_status == "ok"
+        for name in ("forward_ms", "dx_ms", "dgamma_ms", "dbeta_ms"):
+            values = getattr(self, name)
+            record_fields(
+                values,
+                {"reference", "candidate"},
+                name,
+                required={"reference", "candidate"} if successful_grn else set(),
+            )
+            for side, value in values.items():
+                require_number(value, f"{name}.{side}")
+                if successful_grn and (value is None or not isfinite(value) or value <= 0):
+                    raise ValueError(f"{name}.{side} must be positive and finite")
+            object.__setattr__(self, name, freeze(values))
+        record_fields(
+            self.component_peak_bytes,
+            {"forward", "dx", "dgamma", "dbeta"},
+            "component_peak_bytes",
+            required=set(),
+        )
+        for name, values in self.component_peak_bytes.items():
+            record_fields(
+                values, {"reference", "candidate"}, f"component_peak_bytes.{name}", required=set()
+            )
+            for side, value in values.items():
+                require_int(value, f"component_peak_bytes.{name}.{side}", minimum=1)
+        object.__setattr__(self, "component_peak_bytes", freeze(self.component_peak_bytes))
         if self.seed is not None:
             require_int(self.seed, "seed", maximum=2**63 - 1)
         require_sequence(self.spatial_shape, "spatial_shape")
@@ -179,7 +228,12 @@ class Measurement:
             raise ValueError("objective_winner contradicts the objective and kernel measurements")
 
     def to_primitive(self) -> dict[str, object]:
-        return primitive(self)
+        result = primitive(self)
+        # Existing convolution artifacts retain their byte-level field layout.
+        for name in ("forward_ms", "dx_ms", "dgamma_ms", "dbeta_ms", "component_peak_bytes"):
+            if self.family != "global_response_norm3d" and not result[name]:
+                del result[name]
+        return result
 
 
 def measurement_from_result(
@@ -215,6 +269,11 @@ def measurement_from_result(
             "gradient_mask",
             "raw_diagnostic",
             "memory_measured",
+            "forward_ms",
+            "dx_ms",
+            "dgamma_ms",
+            "dbeta_ms",
+            "component_peak_bytes",
         },
         "kernel result",
         required=set(),
@@ -255,6 +314,11 @@ def measurement_from_result(
         gradient_mask=result.get("gradient_mask"),
         raw_diagnostic=result.get("raw_diagnostic", {}),
         memory_measured=result.get("memory_measured"),
+        forward_ms=result.get("forward_ms", {}),
+        dx_ms=result.get("dx_ms", {}),
+        dgamma_ms=result.get("dgamma_ms", {}),
+        dbeta_ms=result.get("dbeta_ms", {}),
+        component_peak_bytes=result.get("component_peak_bytes", {}),
     )
     return replace(item, objective=objective, objective_winner=candidate_wins(item, objective))
 
@@ -278,6 +342,8 @@ def candidate_wins(item: Measurement, objective: Objective) -> bool:
     if item.kernel_valid is not True or item.probe_status != "ok":
         return False
     if not complete_metrics(item, objective):
+        return False
+    if item.family == "global_response_norm3d" and item.candidate_ms >= item.reference_ms:
         return False
     if objective == "throughput":
         return item.candidate_ms < item.reference_ms
@@ -318,6 +384,8 @@ def measurement_identity(item: Measurement) -> tuple[object, ...]:
 
 
 def _operator_conditions(item: Measurement) -> dict[str, object]:
+    if item.family == "global_response_norm3d":
+        return {"family": item.family, "direction": item.direction, "dtype": item.dtype}
     return {
         "family": item.family,
         "direction": item.direction,
@@ -477,6 +545,12 @@ def synthesize_profile(
             for observed in items
         ):
             negatives.append((item, "reference", ()))
+        if item.family == "global_response_norm3d":
+            # GRN's reductions depend on batch, channels and spatial extent separately.
+            # Until broader regions are measured, publish only the exact tensor shape.
+            if winner is not None:
+                exceptions.append((winner, winner.implementation, tuple(sorted(winner.parameters))))
+            continue
         key = (item.family, item.direction, item.phase, item.dtype, item.kernel_size)
         reduction_work = item.batch * prod(item.spatial_shape)
         if item.family == "pointwise_conv3d":

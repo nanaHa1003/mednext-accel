@@ -47,9 +47,14 @@ def _checkpoint(value: str):
     return CheckpointConfig(style="block" if value == "whole-block" else "expansion")
 
 
-def _factory(variant: str):
+def _factory(family: str, variant: str):
     from ..models.mednext_v1 import mednext_base, mednext_large, mednext_medium, mednext_small
+    from ..models.mednext_v2 import mednext_v2_base, mednext_v2_wide
 
+    if family == "mednext_v2":
+        return {"base": mednext_v2_base, "wide": mednext_v2_wide}[variant]
+    if family != "mednext_v1":
+        raise ValueError(f"unknown model family {family!r}")
     return {
         "small": mednext_small,
         "base": mednext_base,
@@ -156,7 +161,7 @@ def _model_probe(payload: dict[str, object], probe: _ProbeRecord) -> dict[str, o
     optimization = payload.get("optimization", "reference")
     probe.stage = "model.initialization"
     model = (
-        _factory(str(workload["variant"]))(
+        _factory(str(workload.get("model_family", "mednext_v1")), str(workload["variant"]))(
             in_channels=int(workload["in_channels"]),
             out_channels=int(workload["out_channels"]),
             checkpointing=_checkpoint(str(workload["checkpointing"])),
@@ -467,20 +472,25 @@ def _kernel_group_probe(payload: dict[str, object]) -> dict[str, object]:
                 raw_probe = _pointwise_probe
             elif family in ("depthwise_conv3d", "depthwise_conv_transpose3d"):
                 raw_probe = _depthwise_probe
+            elif family == "global_response_norm3d":
+                raw_probe = None
             else:
                 raise ValueError(f"unknown kernel family {family!r}")
             if case.get("benchmark_kind") == "integrated_operator":
                 result = _operator_probe(case)
                 # Raw measurements are diagnostic only; their verdict and
                 # timings never replace the integrated dispatch evidence.
-                gc.collect()
-                torch.cuda.empty_cache()
-                result["raw_diagnostic"] = {
-                    **raw_probe(case),
-                    "benchmark_kind": "raw_kernel_diagnostic",
-                }
-            else:
+                if raw_probe is not None:
+                    gc.collect()
+                    torch.cuda.empty_cache()
+                    result["raw_diagnostic"] = {
+                        **raw_probe(case),
+                        "benchmark_kind": "raw_kernel_diagnostic",
+                    }
+            elif raw_probe is not None:
                 result = raw_probe(case)
+            else:
+                raise ValueError("GRN requires an integrated training benchmark")
         except torch.cuda.OutOfMemoryError:
             result = {"status": "oom", "message": "CUDA out of memory", "failure_stage": "dispatch"}
         except Exception as error:
@@ -528,22 +538,26 @@ def _invoke(payload: dict[str, object], *, timeout: float = 900) -> dict[str, ob
     return result.payload
 
 
+def _meta_model(workload: Workload):
+    import torch
+
+    # Construct directly on meta, avoiding allocations for the Wide model.
+    with torch.device("meta"):
+        return _factory(workload.family, workload.variant)(
+            in_channels=workload.in_channels,
+            out_channels=workload.out_channels,
+            checkpointing=_checkpoint(workload.checkpointing),
+            optimization="reference",
+        ).eval()
+
+
 def _pointwise_shapes(workload: Workload) -> tuple[tuple[int, int, tuple[int, int, int]], ...]:
     """Return unique MedNeXt pointwise shapes from a meta-tensor pass."""
 
     import torch
     from torch import nn
 
-    model = (
-        _factory(workload.variant)(
-            in_channels=workload.in_channels,
-            out_channels=workload.out_channels,
-            checkpointing=_checkpoint(workload.checkpointing),
-            optimization="reference",
-        )
-        .to("meta")
-        .eval()
-    )
+    model = _meta_model(workload)
     found: set[tuple[int, int, tuple[int, int, int]]] = set()
     hooks = []
     for module in model.modules():
@@ -572,16 +586,7 @@ def _depthwise_shapes(
     import torch
     from torch import nn
 
-    model = (
-        _factory(workload.variant)(
-            in_channels=workload.in_channels,
-            out_channels=workload.out_channels,
-            checkpointing=_checkpoint(workload.checkpointing),
-            optimization="reference",
-        )
-        .to("meta")
-        .eval()
-    )
+    model = _meta_model(workload)
     found: set[tuple[str, int, int, tuple[int, int, int]]] = set()
     hooks = []
     for module in model.modules():
@@ -615,10 +620,38 @@ def _depthwise_shapes(
     return tuple(sorted(found))
 
 
+def _grn_shapes(workload: Workload) -> tuple[tuple[int, tuple[int, int, int]], ...]:
+    import torch
+
+    from ..ops.grn import GlobalResponseNorm3d
+
+    if workload.family == "mednext_v1":
+        return ()
+    model = _meta_model(workload)
+    found = set()
+    hooks = [
+        module.register_forward_hook(
+            lambda current, inputs, output: found.add(
+                (current.gamma.shape[1], tuple(int(size) for size in inputs[0].shape[2:]))
+            )
+        )
+        for module in model.modules()
+        if isinstance(module, GlobalResponseNorm3d)
+    ]
+    try:
+        with torch.no_grad():
+            model(torch.empty(1, workload.in_channels, *workload.spatial, device="meta"))
+    finally:
+        for hook in hooks:
+            hook.remove()
+    return tuple(sorted(found))
+
+
 def discover_workload_shapes(workload: Workload) -> WorkloadShapes:
     return WorkloadShapes(
         pointwise=_pointwise_shapes(workload),
         depthwise=_depthwise_shapes(workload),
+        grn=_grn_shapes(workload),
     )
 
 
@@ -755,7 +788,10 @@ def execute_campaign(campaign: Campaign, progress: ProgressReporter | None = Non
                 ProgressEvent(
                     "workload",
                     "workload",
-                    message=f"{workload.variant} · {workload.spatial} · {workload.checkpointing}",
+                    message=(
+                        f"{workload.family}/{workload.variant} · "
+                        f"{workload.spatial} · {workload.checkpointing}"
+                    ),
                 )
             )
             progress.emit(ProgressEvent("stage_start", "batch-search"))

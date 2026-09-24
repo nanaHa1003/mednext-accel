@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass, replace
 from torch import nn
 
 from ..models.blocks import EvalModeGELU
+from ..ops.grn import AdaptiveGlobalResponseNorm3d, GlobalResponseNorm3d
 from ..optimization.descriptors import OperatorDescriptor
 
 
@@ -52,6 +53,10 @@ def _descriptor(module: nn.Module, role: str) -> OperatorDescriptor | None:
             module.dilation,
             module.groups,
             role,
+        )
+    if isinstance(module, (GlobalResponseNorm3d, AdaptiveGlobalResponseNorm3d)):
+        return OperatorDescriptor.normalization(
+            family="global_response_norm3d", channels=module.gamma.shape[1], role=role
         )
     if isinstance(module, nn.GroupNorm):
         return OperatorDescriptor.normalization(

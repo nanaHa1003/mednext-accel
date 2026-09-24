@@ -338,3 +338,47 @@ def test_supported_policy_suffixes_preserve_evidence_filename_and_loading(tmp_pa
     assert artifacts.evidence_path.name.startswith("sm120-local.")
     assert ".policy." not in artifacts.evidence_path.name
     assert load_policy(artifacts.policy_path).evidence[-1].file == artifacts.evidence_path.name
+
+
+@pytest.mark.parametrize("accepted", [None, False, True])
+def test_grn_component_win_requires_complete_model_acceptance_to_publish(
+    tmp_path, monkeypatch, grn_case, grn_result, accepted
+):
+    from mednext_accel.profiling.runner import CampaignRun, ExecutionStatistics
+    from mednext_accel.profiling.synthesize import measurement_from_result
+    from mednext_accel.profiling.whole_model import compare_model_results
+
+    winner = measurement_from_result(grn_case, grn_result, checkpointing="none")
+    comparisons = (
+        ()
+        if accepted is None
+        else (
+            compare_model_results(
+                "balanced",
+                {"status": "ok", "step_ms": 10, "peak_bytes": 100},
+                {"status": "ok", "step_ms": 8 if accepted else 12, "peak_bytes": 100},
+                workload={"model_family": "mednext_v2", "variant": "base"},
+                batch=1,
+                seed=0,
+                effective_policy=({"name": "sm120-local", "sha256": "a" * 64},),
+            ),
+        )
+    )
+    run = CampaignRun(
+        (winner,), ExecutionStatistics(1, 1, 1, len(comparisons)), model_comparisons=comparisons
+    )
+    monkeypatch.setattr(
+        api,
+        "collect_environment",
+        lambda: {
+            "gpu": {"sm": [12, 0]},
+            "software": {},
+        },
+    )
+    monkeypatch.setattr(api, "execute_campaign", lambda campaign, progress=None: run)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    result = api.profile({"workloads": [{"family": "mednext_v2", "variant": "base"}]})
+    assert bool(result.policy.rules) is (accepted is True)
+    assert result.evidence.publication.policy_accepted is accepted
+    if accepted:
+        assert result.policy.rules[0].use["training"].implementation == "triton_fused_grn"

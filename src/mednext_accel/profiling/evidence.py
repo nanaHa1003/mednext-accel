@@ -583,6 +583,11 @@ class ProfilingEvidence:
                     "gradient_mask",
                     "raw_diagnostic",
                     "memory_measured",
+                    "forward_ms",
+                    "dx_ms",
+                    "dgamma_ms",
+                    "dbeta_ms",
+                    "component_peak_bytes",
                 }
                 if record_type is Measurement
                 else set()

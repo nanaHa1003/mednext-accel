@@ -21,10 +21,23 @@ class KernelCaseKey:
     spatial_shape: tuple[int, int, int]
     in_channels: int
     out_channels: int
-    kernel_size: int
+    kernel_size: int | None
     dtype: str
     implementation: str
     parameters: tuple[tuple[str, int], ...]
+
+    def __post_init__(self) -> None:
+        if self.family == "global_response_norm3d":
+            if self.kernel_size is not None:
+                raise ValueError("GRN kernel_size must be None")
+            if self.phase != "training" or self.direction != "regular":
+                raise ValueError("GRN cases require regular direction and combined training phase")
+            if self.in_channels != self.out_channels:
+                raise ValueError("GRN input and output channels must match")
+            if self.parameters:
+                raise ValueError("GRN has no launch parameters")
+        elif type(self.kernel_size) is not int or self.kernel_size < 1:
+            raise ValueError("kernel_size must be a positive integer for convolution cases")
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,7 +129,7 @@ def _case(
     spatial_shape: tuple[int, int, int],
     in_channels: int,
     out_channels: int,
-    kernel_size: int,
+    kernel_size: int | None,
     dtype: str,
     implementation: str,
     parameters: tuple[tuple[str, int], ...] = (),
@@ -144,6 +157,7 @@ def build_workload_cases(
     *,
     pointwise_shapes: tuple[tuple[int, int, tuple[int, int, int]], ...],
     depthwise_shapes: tuple[tuple[str, int, int, tuple[int, int, int]], ...],
+    grn_shapes: tuple[tuple[int, tuple[int, int, int]], ...] = (),
     sm: tuple[int, int] | None = None,
 ) -> tuple[KernelCase, ...]:
     """Build the isolated operator cases discovered for one workload.
@@ -155,6 +169,21 @@ def build_workload_cases(
     cases: list[KernelCase] = []
     for dtype in workload.dtypes:
         for batch in batches:
+            for channels, spatial in sorted(set(grn_shapes)):
+                cases.append(
+                    _case(
+                        family="global_response_norm3d",
+                        direction="regular",
+                        phase="training",
+                        batch=batch,
+                        spatial_shape=spatial,
+                        in_channels=channels,
+                        out_channels=channels,
+                        kernel_size=None,
+                        dtype=dtype,
+                        implementation="triton_fused_grn",
+                    )
+                )
             for in_channels, out_channels, spatial in pointwise_shapes:
                 cases.append(
                     _case(
@@ -289,9 +318,10 @@ def deduplicate_cases(
 
 
 def group_cases(cases: tuple[KernelCase, ...]) -> tuple[KernelGroup, ...]:
-    """Group cases by batch and one of the five kernel probe categories."""
+    """Group cases by batch and a kernel probe category."""
 
     categories = {
+        ("global_response_norm3d", "regular", "training"): "grn",
         ("pointwise_conv3d", "regular", "training"): "pointwise",
         ("depthwise_conv3d", "regular", "backward_input"): "regular-dx",
         ("depthwise_conv3d", "regular", "backward_weight"): "regular-dw",

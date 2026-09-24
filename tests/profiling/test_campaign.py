@@ -106,3 +106,36 @@ def test_unknown_workload_fields_are_rejected_in_sorted_order() -> None:
         ValueError, match=r"unknown workloads\[1\] field\(s\): base_channels, kernel_size"
     ):
         load_campaign({"workloads": [{}, {"kernel_size": 3, "base_channels": 32}]})
+
+
+def test_family_alias_defaults_and_preserves_legacy_evidence(tmp_path):
+    from mednext_accel.profiling.campaign import Workload
+
+    assert Workload(variant="base", spatial=(32, 32, 32)).family == "mednext_v1"
+    assert load_campaign({"workloads": [{}]}).workloads[0].family == "mednext_v1"
+    path = tmp_path / "v2.yaml"
+    path.write_text("workloads:\n  - family: mednext_v2\n    variant: wide\n")
+    campaign = load_campaign(path)
+    assert campaign.workloads[0].family == "mednext_v2"
+    serialized = campaign_to_primitive(campaign)["workloads"][0]
+    assert serialized["model_family"] == "mednext_v2"
+    assert "family" not in serialized
+    assert (
+        load_campaign({"workloads": [{"model_family": "mednext_v2"}]}).workloads[0].variant
+        == "base"
+    )
+
+
+def test_matching_family_aliases_are_allowed_and_conflicts_are_precise():
+    item = {"family": "mednext_v2", "model_family": "mednext_v2"}
+    assert load_campaign({"workloads": [item]}).workloads[0].family == "mednext_v2"
+    with pytest.raises(ValueError, match="family.*model_family.*disagree"):
+        load_campaign({"workloads": [{**item, "model_family": "mednext_v1"}]})
+
+
+@pytest.mark.parametrize(
+    "family,variant", [("unknown", "base"), ("mednext_v1", "wide"), ("mednext_v2", "small")]
+)
+def test_family_and_variant_must_be_supported(family, variant):
+    with pytest.raises(ValueError, match="unknown.*(family|variant)"):
+        load_campaign({"workloads": [{"family": family, "variant": variant}]})

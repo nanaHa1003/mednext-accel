@@ -72,3 +72,54 @@ def test_execution_sm_selects_architecture_recipe_in_kernel_plan():
     )
     dw = next(case for case in cases if case.key.phase == "backward_weight")
     assert dict(dw.key.parameters) == {"dw_splits": 6, "dw_block": 1024}
+
+
+def test_grn_cases_have_one_training_candidate_without_fake_kernel_or_parameters():
+    workload = Workload("mednext_v2", "base", (32, 32, 32))
+    cases = build_workload_cases(
+        workload,
+        (1, 2),
+        pointwise_shapes=(),
+        depthwise_shapes=(),
+        grn_shapes=((96, (32, 32, 32)), (96, (32, 32, 32))),
+    )
+    assert len(cases) == 2
+    assert {case.key.batch for case in cases} == {1, 2}
+    assert all(case.key.family == "global_response_norm3d" for case in cases)
+    assert all(case.key.phase == "training" for case in cases)
+    assert all(case.key.kernel_size is None and not case.key.parameters for case in cases)
+    assert all(case.key.implementation == "triton_fused_grn" for case in cases)
+    assert {group.category for group in group_cases(cases)} == {"grn"}
+
+
+def test_nullable_kernel_size_is_exclusive_to_grn():
+    from dataclasses import replace
+
+    import pytest
+
+    from mednext_accel.profiling.matrix import KernelCaseKey
+
+    grn = KernelCaseKey(
+        "global_response_norm3d",
+        "regular",
+        "training",
+        1,
+        (3, 4, 5),
+        8,
+        8,
+        None,
+        "bfloat16",
+        "triton_fused_grn",
+        (),
+    )
+    for changes in (
+        {"family": "pointwise_conv3d"},
+        {"kernel_size": 1},
+        {"phase": "backward_input"},
+        {"parameters": (("block", 128),)},
+    ):
+        with pytest.raises(ValueError):
+            replace(grn, **changes)
+    for kernel in (0, -1, 1.5, True):
+        with pytest.raises(ValueError, match="kernel_size"):
+            replace(grn, family="pointwise_conv3d", kernel_size=kernel)

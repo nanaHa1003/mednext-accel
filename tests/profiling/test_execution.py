@@ -142,3 +142,19 @@ def test_workload_maxima_are_the_only_planned_batches() -> None:
     assert [run.batches for run in plan.workloads] == [(3,), (5,)]
     assert [set(run.reference_steps) for run in plan.workloads] == [{3}, {5}]
     assert plan.requested_case_count == 2
+
+
+def test_grn_workload_cases_participate_in_global_deduplication():
+    workload = Workload("mednext_v2", "base", (32, 32, 32))
+    campaign = Campaign(
+        "all", (workload, replace(workload, checkpointing="whole-block")), BatchSearch()
+    )
+    plan = build_execution_plan(
+        campaign,
+        discover=lambda _: WorkloadShapes((), (), ((96, (32, 32, 32)),)),
+        search=lambda _: WorkloadBatchSelection((1,), {1: reference_step()}),
+    )
+    assert len(plan.kernel_cases) == 1
+    assert plan.requested_case_count == 2
+    assert plan.kernel_groups[0].category == "grn"
+    assert plan.workloads[0].case_keys == plan.workloads[1].case_keys

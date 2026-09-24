@@ -228,3 +228,66 @@ def test_full_evidence_roundtrip_preserves_failed_probes_and_model_rejection():
     assert decoded == record
     assert list(decoded.batch_searches[0].by_batch) == [16, 12]
     assert decoded.model_comparisons[0].policy_accepted is False
+
+
+def test_grn_evidence_roundtrip_preserves_nullable_kernel_and_diagnostics(grn_case, grn_result):
+    from mednext_accel.profiling.evidence import (
+        CampaignEvidence,
+        EnvironmentEvidence,
+        ProfilingEvidence,
+    )
+    from mednext_accel.profiling.synthesize import measurement_from_result
+
+    record = measurement_from_result(grn_case, grn_result, checkpointing="none")
+    source = ProfilingEvidence(
+        EnvironmentEvidence({}),
+        CampaignEvidence(
+            campaign_to_primitive(load_campaign({"workloads": [{"family": "mednext_v2"}]}))
+        ),
+        kernel_measurements=(record,),
+    )
+    data = json.loads(json.dumps(source.to_primitive()))
+    assert data["kernel_measurements"][0]["kernel_size"] is None
+    assert data["kernel_measurements"][0]["dgamma_ms"] == {"reference": 0.4, "candidate": 0.2}
+    assert ProfilingEvidence.from_primitive(data) == source
+    with pytest.raises(TypeError):
+        record.dx_ms["candidate"] = 10
+
+
+@pytest.mark.parametrize("field", ["forward_ms", "dx_ms", "dgamma_ms", "dbeta_ms"])
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        None,
+        {},
+        {"candidate": 0.2},
+        {"reference": 1, "candidate": 0},
+        {"reference": 1, "candidate": float("nan")},
+    ],
+)
+def test_successful_grn_requires_complete_positive_component_diagnostics(
+    grn_case, grn_result, field, invalid
+):
+    from mednext_accel.profiling.synthesize import measurement_from_result
+
+    grn_result[field] = invalid
+    with pytest.raises(ValueError, match=field):
+        measurement_from_result(grn_case, grn_result, checkpointing="none")
+
+
+def test_partial_grn_failure_retains_completed_diagnostics(grn_case):
+    from mednext_accel.profiling.synthesize import measurement_from_result
+
+    record = measurement_from_result(
+        grn_case,
+        {
+            "status": "oom",
+            "forward_ms": {"reference": 0.4},
+            "benchmark_kind": "integrated_operator",
+            "gradient_mask": (True, True, True),
+        },
+        checkpointing="none",
+    )
+    assert record.kernel_size is None
+    assert record.forward_ms == {"reference": 0.4}
+    assert record.objective_winner is False

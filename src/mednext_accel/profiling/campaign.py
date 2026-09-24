@@ -13,18 +13,30 @@ import yaml
 from .batch_search import BatchSearch
 
 _VARIANTS = ("small", "base", "medium", "large")
+_FAMILY_VARIANTS = {"mednext_v1": _VARIANTS, "mednext_v2": ("base", "wide")}
 _CHECKPOINT_CONTEXTS = ("none", "all-expansion", "whole-block")
 
 
 @dataclass(frozen=True, slots=True)
 class Workload:
-    model_family: str
-    variant: str
-    spatial: tuple[int, int, int]
+    model_family: Literal["mednext_v1", "mednext_v2"] = "mednext_v1"
+    variant: str = "base"
+    spatial: tuple[int, int, int] = (128, 128, 128)
     dtypes: tuple[str, ...] = ("bfloat16",)
     checkpointing: str = "none"
     in_channels: int = 1
     out_channels: int = 3
+
+    @property
+    def family(self) -> Literal["mednext_v1", "mednext_v2"]:
+        """Campaign spelling; evidence retains the canonical model_family key."""
+        return self.model_family
+
+    def __post_init__(self) -> None:
+        if self.model_family not in _FAMILY_VARIANTS:
+            raise ValueError(f"unknown model family {self.model_family!r}")
+        if self.variant not in _FAMILY_VARIANTS[self.model_family]:
+            raise ValueError(f"unknown {self.model_family} variant {self.variant!r}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,15 +135,29 @@ def load_campaign(source: CampaignSource | None) -> Campaign:
                 raise ValueError("workload phases was removed; profiling measures training only")
             unknown_fields = sorted(
                 set(item)
-                - {"variant", "spatial", "dtypes", "checkpointing", "in_channels", "out_channels"}
+                - {
+                    "family",
+                    "model_family",
+                    "variant",
+                    "spatial",
+                    "dtypes",
+                    "checkpointing",
+                    "in_channels",
+                    "out_channels",
+                }
             )
             if unknown_fields:
                 raise ValueError(
                     f"unknown workloads[{index}] field(s): {', '.join(unknown_fields)}"
                 )
+            if (
+                "family" in item
+                and "model_family" in item
+                and item["family"] != item["model_family"]
+            ):
+                raise ValueError(f"workloads[{index}].family and model_family disagree")
+            family = str(item.get("family", item.get("model_family", "mednext_v1")))
             variant = str(item.get("variant", "base"))
-            if variant not in _VARIANTS:
-                raise ValueError(f"unknown MedNeXt v1 variant {variant!r}")
             spatial_value = item.get("spatial", (128, 128, 128))
             if not isinstance(spatial_value, (list, tuple)) or len(spatial_value) != 3:
                 raise ValueError(f"workloads[{index}].spatial must contain three integers")
@@ -143,7 +169,7 @@ def load_campaign(source: CampaignSource | None) -> Campaign:
                     raise ValueError(f"unknown checkpoint context {context!r}")
                 expanded.append(
                     Workload(
-                        model_family="mednext_v1",
+                        model_family=family,
                         variant=variant,
                         spatial=spatial,  # type: ignore[arg-type]
                         dtypes=tuple(item.get("dtypes", ("bfloat16",))),

@@ -22,6 +22,7 @@ from .progress import ProgressEvent, ProgressReporter
 class WorkloadShapes:
     pointwise: tuple[tuple[int, int, tuple[int, int, int]], ...]
     depthwise: tuple[tuple[str, int, int, tuple[int, int, int]], ...]
+    grn: tuple[tuple[int, tuple[int, int, int]], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,12 +100,15 @@ def build_execution_plan(
                     (1,),
                     pointwise_shapes=shapes.pointwise,
                     depthwise_shapes=shapes.depthwise,
+                    grn_shapes=shapes.grn,
                     sm=sm,
                 )
                 for workload, shapes in discovered
             )
         )
         pointwise_count = sum(case.key.family == "pointwise_conv3d" for case in static_cases)
+        grn_count = sum(case.key.family == "global_response_norm3d" for case in static_cases)
+        depthwise_count = len(static_cases) - pointwise_count - grn_count
         categories = tuple(group.category for group in group_cases(static_cases))
         progress.emit(
             ProgressEvent(
@@ -113,7 +117,8 @@ def build_execution_plan(
                 message=(
                     f"static shape plan: {len(workloads)} workloads, "
                     f"{pointwise_count} unique pointwise shapes, "
-                    f"{len(static_cases) - pointwise_count} unique depthwise phase/shape pairs, "
+                    f"{depthwise_count} unique depthwise phase/shape pairs, "
+                    f"{grn_count} unique GRN training shapes, "
                     f"{len(categories)} possible kernel groups per feasible batch "
                     f"({', '.join(categories) or 'none'})"
                 ),
@@ -126,6 +131,7 @@ def build_execution_plan(
             result.batches,
             pointwise_shapes=shapes.pointwise,
             depthwise_shapes=shapes.depthwise,
+            grn_shapes=shapes.grn,
             sm=sm,
         )
         for workload, shapes, result in searched

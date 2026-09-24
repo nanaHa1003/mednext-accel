@@ -214,7 +214,7 @@ def test_model_failure_stages_are_preserved(cpu_probe, monkeypatch, stage):
     def fail(*args, **kwargs):
         raise RuntimeError(f"{stage} failed")
 
-    monkeypatch.setattr(runner, "_factory", lambda variant: factory)
+    monkeypatch.setattr(runner, "_factory", lambda family, variant: factory)
     monkeypatch.setattr(runner, "_timed", timed)
     if stage == "backward":
         monkeypatch.setattr(torch.Tensor, "backward", fail)
@@ -239,7 +239,17 @@ def test_model_failure_stages_are_preserved(cpu_probe, monkeypatch, stage):
     assert result["failure_stage"] == expected
 
 
-def test_eager_campaign_model_probe_completes_a_training_step(cpu_probe, monkeypatch):
+@pytest.mark.parametrize(
+    "family,variant",
+    [
+        ("mednext_v1", "small"),
+        ("mednext_v2", "base"),
+        ("mednext_v2", "wide"),
+    ],
+)
+def test_eager_campaign_model_probe_completes_a_training_step(
+    cpu_probe, monkeypatch, family, variant
+):
     class Tiny(torch.nn.Conv3d):
         def cuda(self):
             return self
@@ -251,7 +261,8 @@ def test_eager_campaign_model_probe_completes_a_training_step(cpu_probe, monkeyp
             "compile_mode": "eager",
             "workloads": [
                 {
-                    "variant": "small",
+                    "family": family,
+                    "variant": variant,
                     "checkpointing": "none",
                     "in_channels": 1,
                     "out_channels": 2,
@@ -266,7 +277,11 @@ def test_eager_campaign_model_probe_completes_a_training_step(cpu_probe, monkeyp
         function()
         return 1.0, 64
 
-    monkeypatch.setattr(runner, "_factory", lambda variant: lambda **kwargs: model)
+    def factory(selected_family, selected_variant):
+        assert (selected_family, selected_variant) == (family, variant)
+        return lambda **kwargs: model
+
+    monkeypatch.setattr(runner, "_factory", factory)
     monkeypatch.setattr(runner, "_timed", timed)
     result = runner._model_probe(
         {

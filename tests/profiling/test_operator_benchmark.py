@@ -274,3 +274,46 @@ def test_non_graph_timing_accounts_for_live_working_allocations(compile_mode):
     baseline = torch.cuda.memory_allocated()
     _, peak = runner._timed(lambda: forward(sample))
     assert peak >= baseline + sample.numel() * sample.element_size()
+
+
+def test_grn_integrated_dispatch_does_not_attempt_a_raw_convolution_probe(monkeypatch, grn_case):
+    monkeypatch.setattr(
+        runner,
+        "_operator_probe",
+        lambda payload: {
+            "status": "ok",
+            "implementation": payload["implementation"],
+        },
+    )
+    result = runner._kernel_group_probe({"cases": [case_payload(grn_case)]})["results"][0]
+    assert result["status"] == "ok", result
+    assert result["implementation"] == "triton_fused_grn"
+    assert "raw_diagnostic" not in result
+
+
+def test_grn_benchmark_requires_the_complete_training_mask(grn_case):
+    result = runner._operator_probe(case_payload(grn_case, gradient_mask=(True, False, True)))
+    assert result["status"] == "error"
+    assert "GRN requires all three gradients" in result["message"]
+
+
+@pytest.mark.cuda
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.parametrize("compile_mode", ["eager", "default", "max-autotune-no-cudagraphs"])
+def test_integrated_grn_benchmark_validates_all_gradients_and_records_diagnostics(
+    grn_case, compile_mode
+):
+    result = runner._operator_probe(case_payload(grn_case, seed=13, compile_mode=compile_mode))
+    assert result["status"] == "ok", result
+    assert result["valid"] is True, result
+    assert set(result["validation_metrics"]) == {"output", "dX", "dGamma", "dBeta"}
+    assert result["reference_ms"] > 0 and result["candidate_ms"] > 0
+    assert result["reference_peak_bytes"] > 0 and result["candidate_peak_bytes"] > 0
+    assert result["memory_measured"] is True
+    for field in ("forward_ms", "dx_ms", "dgamma_ms", "dbeta_ms"):
+        assert set(result[field]) == {"reference", "candidate"}
+        assert all(value > 0 for value in result[field].values())
+    assert set(result["component_peak_bytes"]) == {"forward", "dx", "dgamma", "dbeta"}
+    record = measurement_from_result(grn_case, result, checkpointing="none")
+    assert record.kernel_size is None
+    assert record.phase == "training"

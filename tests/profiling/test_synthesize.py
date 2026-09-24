@@ -709,3 +709,68 @@ def test_pointwise_region_resolves_unseen_channels_and_batch_but_respects_bounds
         (op, replace(ctx, batch_size=1)),
     ]:
         assert resolver.resolve(descriptor, context, "training").implementation == "reference"
+
+
+def test_grn_synthesis_uses_only_combined_training_and_exact_geometry(grn_case, grn_result):
+    from mednext_accel.optimization.policy import policy_to_primitive
+    from mednext_accel.profiling.synthesize import measurement_from_result
+
+    winner = measurement_from_result(grn_case, grn_result, checkpointing="none")
+    policy = synthesize_profile([winner], name="grn", sm=(12, 0), objective="balanced")
+    rule = policy_to_primitive(policy)["rules"][0]
+    assert set(rule["use"]) == {"training"}
+    assert rule["use"]["training"] == {"implementation": "triton_fused_grn"}
+    assert "kernel_size" not in rule["when"] and "stride" not in rule["when"]
+    assert rule["when"]["channels"] == [8, 8]
+    assert rule["when"]["spatial_shape"] == [3, 4, 5]
+    # Tiny component timings cannot overcome a combined training regression.
+    loser = replace(winner, candidate_ms=3.0, objective_winner=False)
+    for objective in ("balanced", "throughput", "memory"):
+        assert not candidate_wins(loser, objective)
+    losing_policy = synthesize_profile([loser], name="grn", sm=(12, 0), objective="balanced")
+    assert losing_policy.rules[0].use["training"].implementation == "reference"
+
+
+def test_grn_memory_win_also_requires_combined_training_improvement(grn_case, grn_result):
+    from mednext_accel.profiling.synthesize import measurement_from_result
+
+    grn_result["candidate_ms"] = 2.1
+    item = measurement_from_result(grn_case, grn_result, checkpointing="none", objective="memory")
+    assert not candidate_wins(item, "memory")
+
+
+@pytest.mark.parametrize("missing", ["output", "dX", "dGamma", "dBeta"])
+def test_grn_dispatch_needs_validation_of_every_gradient(grn_case, grn_result, missing):
+    from mednext_accel.profiling.synthesize import measurement_from_result
+
+    del grn_result["validation_metrics"][missing]
+    with pytest.raises(ValueError, match="GRN.*validation"):
+        measurement_from_result(grn_case, grn_result, checkpointing="none")
+
+
+def test_grn_policy_resolves_measured_shape_and_falls_back_outside_it(grn_case, grn_result):
+    from mednext_accel.optimization.descriptors import ExecutionContext, OperatorDescriptor
+    from mednext_accel.optimization.policy_resolver import PolicyResolver
+    from mednext_accel.profiling.synthesize import measurement_from_result
+
+    item = measurement_from_result(grn_case, grn_result, checkpointing="none")
+    policy = synthesize_profile([item], name="grn", sm=(12, 0), objective="balanced")
+    resolver = PolicyResolver(external=policy)
+    descriptor = OperatorDescriptor.normalization(family="global_response_norm3d", channels=8)
+    context = ExecutionContext(
+        "training", "cuda", (12, 0), 0, "bfloat16", 1, (3, 4, 5), "mednext_v2", "base", "none"
+    )
+    assert resolver.resolve(descriptor, context, "training").implementation == "triton_fused_grn"
+    for changed in (replace(context, batch_size=2), replace(context, spatial_shape=(3, 5, 4))):
+        assert resolver.resolve(descriptor, changed, "training").implementation == "reference"
+    for phase in ("forward", "backward_input", "backward_weight", "backward_bias"):
+        assert resolver.resolve(descriptor, context, phase).implementation == "reference"
+
+
+def test_v1_measurement_output_omits_grn_extension_fields():
+    document = measured(1, 2.0, 1.0).to_primitive()
+    assert (
+        not {"forward_ms", "dx_ms", "dgamma_ms", "dbeta_ms", "component_peak_bytes"}
+        & document.keys()
+    )
+    assert Measurement(**document).to_primitive() == document
