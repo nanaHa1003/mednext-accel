@@ -49,8 +49,8 @@ class MedNeXtV2Config:
             raise ValueError("in_channels and out_channels must be positive")
         if self.base_channels <= 0:
             raise ValueError("base_channels must be positive")
-        if self.kernel_size <= 0 or self.kernel_size % 2 == 0:
-            raise ValueError("kernel_size must be a positive odd integer")
+        if self.kernel_size != 3:
+            raise ValueError("MedNeXt v2 kernel_size must be 3")
         if len(self.block_counts) != 9 or len(self.expansion_ratios) != 9:
             raise ValueError("MedNeXt v2 requires nine block stages")
         if (
