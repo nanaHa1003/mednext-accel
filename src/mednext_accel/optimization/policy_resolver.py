@@ -58,42 +58,11 @@ def _matches(rule: PolicyRule, descriptor: OperatorDescriptor, context: Executio
         "checkpointing": context.checkpointing,
     }
     return all(
-        expected.contains(facts[name])
+        facts.get(name) is not None
+        and expected.contains(facts[name])
         if isinstance(expected, NumericRange)
-        else expected == facts[name]
+        else facts.get(name) is not None and expected == facts[name]
         for name, expected in rule.when.items()
-    )
-
-
-def _geometry_allowed(implementation: str, descriptor: OperatorDescriptor) -> bool:
-    if implementation == "pointwise_gemm_per_sample":
-        return (
-            descriptor.direction == "regular"
-            and descriptor.kernel_size == (1, 1, 1)
-            and descriptor.stride == (1, 1, 1)
-            and descriptor.padding == (0, 0, 0)
-            and descriptor.dilation == (1, 1, 1)
-            and descriptor.groups == 1
-        )
-    if not implementation.startswith("triton_"):
-        return True
-    kernel = descriptor.kernel_size[0]
-    direction = (
-        "transpose"
-        if implementation == "triton_transpose_split_dw"
-        else "downsample"
-        if implementation == "triton_downsample_dx"
-        else "regular"
-    )
-    stride = 1 if direction == "regular" else 2
-    return (
-        descriptor.direction == direction
-        and descriptor.kernel_size == (kernel,) * 3
-        and kernel % 2 == 1
-        and descriptor.stride == (stride,) * 3
-        and descriptor.padding == (kernel // 2,) * 3
-        and descriptor.dilation == (1, 1, 1)
-        and descriptor.groups == descriptor.in_channels == descriptor.out_channels
     )
 
 
@@ -113,11 +82,13 @@ class PolicyResolver:
         registry: ImplementationRegistry | None = None,
         triton_available: bool | None = None,
     ) -> None:
-        self.bundled = tuple(bundled)
-        self.external = external
-        self.registry = registry or default_implementation_registry()
         self.triton_available = (
             find_spec("triton") is not None if triton_available is None else triton_available
+        )
+        self.bundled = tuple(bundled)
+        self.external = external
+        self.registry = registry or default_implementation_registry(
+            triton_available=self.triton_available
         )
         self._warned: set[str] = set()
 
@@ -210,21 +181,7 @@ class PolicyResolver:
             return "implementation is not export safe"
         if spec.equivalence == "approximate" and not context.allow_approximate:
             return "approximate implementation requires allow_approximate"
-        triton = selection.implementation.startswith("triton_")
-        pointwise = selection.implementation == "pointwise_gemm_per_sample"
-        if triton or pointwise:
-            if context.phase != "training":
-                return "implementation requires training"
-            if context.dtype not in ("bfloat16", "float16", "float32"):
-                return "implementation does not support this dtype"
-            if not _geometry_allowed(selection.implementation, descriptor):
-                return "implementation does not support this geometry"
-        if triton:
-            if not self.triton_available:
-                return "Triton backend is unavailable"
-            if len(set(context.spatial_shape)) != 1:
-                return "implementation requires a cubic spatial shape"
-        return None
+        return self.registry.guard(selection.implementation, descriptor, context, phase)
 
     def _decision(
         self,
@@ -255,11 +212,7 @@ class PolicyResolver:
                 warning,
                 guard_reason=reason,
             )
-        execution_guards = ()
-        if selection.implementation.startswith("triton_"):
-            execution_guards = ("grad_enabled", "rank_5", "contiguous", "zero_output_padding")
-        elif selection.implementation == "pointwise_gemm_per_sample":
-            execution_guards = ("grad_enabled", "rank_5", "contiguous")
+        execution_guards = self.registry.execution_guards(selection.implementation)
         return PolicyDecision(
             descriptor,
             phase,

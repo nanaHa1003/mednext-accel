@@ -4,6 +4,7 @@ from dataclasses import replace
 import pytest
 
 from mednext_accel.optimization.descriptors import ExecutionContext, OperatorDescriptor
+from mednext_accel.optimization.implementations import ImplementationRegistry, ImplementationSpec
 from mednext_accel.optimization.policy import parse_policy
 from mednext_accel.optimization.policy_resolver import PolicyResolver
 
@@ -250,6 +251,55 @@ def test_match_conditions_use_descriptor_and_execution_facts(conditions, matchin
         descriptor(), context(), "backward_weight"
     )
     assert (result.implementation == "triton_split_dw") == matching
+
+
+def test_geometry_condition_does_not_match_normalization_descriptor():
+    result = resolver(
+        [
+            policy(
+                "grn",
+                [
+                    rule(
+                        implementation="reference",
+                        phase="training",
+                        parameters=None,
+                        when={
+                            "family": "global_response_norm3d",
+                            "kernel_size": [3, 3, 3],
+                        },
+                    )
+                ],
+            )
+        ]
+    ).resolve(
+        OperatorDescriptor.normalization(family="global_response_norm3d", channels=96),
+        context(),
+        "training",
+    )
+    assert result.rule == "fallback"
+
+
+def test_eligibility_is_registered_instead_of_inferred_from_triton_prefix():
+    registry = ImplementationRegistry()
+    norm_descriptor = OperatorDescriptor.normalization(
+        family="global_response_norm3d", channels=96
+    )
+    registry.register(
+        ImplementationSpec(
+            "triton_test_norm",
+            1,
+            ("global_response_norm3d",),
+            ("training",),
+            "numerical",
+            False,
+        ),
+        eligibility=lambda descriptor, context, phase: "blocked by test guard",
+        execution_guards=("rank_5",),
+    )
+    assert registry.guard("triton_test_norm", norm_descriptor, context(), "training") == (
+        "blocked by test guard"
+    )
+    assert registry.execution_guards("triton_test_norm") == ("rank_5",)
 
 
 @pytest.mark.parametrize(

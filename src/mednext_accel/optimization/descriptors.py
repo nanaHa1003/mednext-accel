@@ -27,23 +27,67 @@ class OperatorDescriptor:
     direction: str
     in_channels: int
     out_channels: int
-    kernel_size: tuple[int, ...]
-    stride: tuple[int, ...]
-    padding: tuple[int, ...]
-    dilation: tuple[int, ...]
-    groups: int
+    kernel_size: tuple[int, ...] | None = None
+    stride: tuple[int, ...] | None = None
+    padding: tuple[int, ...] | None = None
+    dilation: tuple[int, ...] | None = None
+    groups: int | None = None
     role: str | None = None
 
     def __post_init__(self) -> None:
         if not self.family or not self.direction:
             raise ValueError("family and direction must be non-empty")
-        for name in ("in_channels", "out_channels", "groups"):
+        for name in ("in_channels", "out_channels"):
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be positive")
+        geometry = ("kernel_size", "stride", "padding", "dilation", "groups")
+        present = tuple(getattr(self, name) is not None for name in geometry)
+        if any(present) and not all(present):
+            raise ValueError("convolution geometry fields must be supplied together")
+        if not any(present):
+            return
+        if self.groups is None or self.groups <= 0:
+            raise ValueError("groups must be positive")
         object.__setattr__(self, "kernel_size", _spatial_tuple(self.kernel_size, "kernel_size"))
         object.__setattr__(self, "stride", _spatial_tuple(self.stride, "stride"))
-        object.__setattr__(self, "padding", _spatial_tuple(self.padding, "padding", positive=False))
+        object.__setattr__(
+            self, "padding", _spatial_tuple(self.padding, "padding", positive=False)
+        )
         object.__setattr__(self, "dilation", _spatial_tuple(self.dilation, "dilation"))
+
+    @classmethod
+    def normalization(
+        cls, *, family: str, channels: int, role: str | None = None
+    ) -> OperatorDescriptor:
+        return cls(family, "regular", channels, channels, role=role)
+
+    @classmethod
+    def convolution(
+        cls,
+        *,
+        family: str,
+        direction: str,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: tuple[int, ...],
+        stride: tuple[int, ...],
+        padding: tuple[int, ...],
+        dilation: tuple[int, ...],
+        groups: int,
+        role: str | None = None,
+    ) -> OperatorDescriptor:
+        return cls(
+            family,
+            direction,
+            in_channels,
+            out_channels,
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            groups,
+            role,
+        )
 
     @property
     def signature(self) -> tuple[object, ...]:
@@ -59,8 +103,9 @@ class OperatorDescriptor:
     def to_primitive(self) -> dict[str, object]:
         value = asdict(self)
         for name in ("kernel_size", "stride", "padding", "dilation"):
-            value[name] = list(value[name])
-        return value
+            if value[name] is not None:
+                value[name] = list(value[name])
+        return {name: item for name, item in value.items() if item is not None}
 
 
 @dataclass(frozen=True, slots=True)

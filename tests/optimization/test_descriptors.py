@@ -19,6 +19,36 @@ def test_descriptor_has_a_stable_primitive_identity() -> None:
     assert descriptor.signature == ("depthwise_conv3d", "regular", 32, 32, (3, 3, 3), (1, 1, 1))
 
 
+def test_normalization_descriptor_has_no_fake_convolution_geometry() -> None:
+    item = OperatorDescriptor.normalization(
+        family="global_response_norm3d", channels=96, role="encoder_stages.0.0.grn"
+    )
+    assert item.kernel_size is None
+    assert item.groups is None
+    assert item.to_primitive() == {
+        "family": "global_response_norm3d",
+        "direction": "regular",
+        "in_channels": 96,
+        "out_channels": 96,
+        "role": "encoder_stages.0.0.grn",
+    }
+
+
+def test_convolution_descriptor_retains_geometry_validation() -> None:
+    with pytest.raises(ValueError, match="kernel_size"):
+        OperatorDescriptor.convolution(
+            family="depthwise_conv3d",
+            direction="regular",
+            in_channels=4,
+            out_channels=4,
+            kernel_size=(0, 0, 0),
+            stride=(1, 1, 1),
+            padding=(1, 1, 1),
+            dilation=(1, 1, 1),
+            groups=4,
+        )
+
+
 def test_execution_context_records_runtime_resolution_inputs() -> None:
     context = ExecutionContext(
         phase="training",
