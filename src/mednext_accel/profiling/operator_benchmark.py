@@ -7,6 +7,35 @@ import copy
 from .matrix import KernelCase
 
 
+def _time_backward_component(forward, module, target, gradient):
+    """Time backward on fresh graphs; compiled donated buffers cannot be retained."""
+    import torch
+
+    from .runner import _timed
+
+    for _ in range(2):
+        torch.autograd.grad(forward(module), (target,), gradient, retain_graph=False)
+    measurements = []
+    for _ in range(5):
+        # Preparation is outside the timed interval. Each backward consumes this
+        # graph once, including when AOTAutograd donates its saved buffers.
+        output = forward(module)
+        measurements.append(
+            _timed(
+                lambda output=output: torch.autograd.grad(
+                    output, (target,), gradient, retain_graph=False
+                ),
+                warmup=0,
+                repetitions=1,
+            )
+        )
+        del output
+    return (
+        sum(duration for duration, _ in measurements) / len(measurements),
+        max(peak for _, peak in measurements),
+    )
+
+
 def benchmark_operator(
     case: KernelCase,
     *,
@@ -203,8 +232,8 @@ def benchmark_operator(
     )
     if grn:
         # These are requested-output diagnostics, not independent implementations:
-        # fused backward shares its reductions across all three gradients. A retained
-        # forward graph excludes forward time from each backward diagnostic; the
+        # fused backward shares its reductions across all three gradients. Fresh
+        # forward graphs are prepared outside each backward diagnostic's timing;
         # combined measurement above includes fresh forward + all gradients.
         for side, module in (("reference", native), ("candidate", candidate)):
             probe.stage = f"diagnostics.{side}.forward"
@@ -217,13 +246,7 @@ def benchmark_operator(
                 ("dx", "dgamma", "dbeta"), (sample, module.gamma, module.beta), strict=True
             ):
                 probe.stage = f"diagnostics.{side}.{name}"
-                output = forward(module)
-                duration, peak = _timed(
-                    lambda output=output, target=target: torch.autograd.grad(
-                        output, (target,), gradient, retain_graph=True
-                    )
-                )
-                del output
+                duration, peak = _time_backward_component(forward, module, target, gradient)
                 probe.result.setdefault(f"{name}_ms", {})[side] = duration
                 probe.result["component_peak_bytes"].setdefault(name, {})[side] = peak
     return {**probe.result, "status": "ok"}

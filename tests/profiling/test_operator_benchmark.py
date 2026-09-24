@@ -317,3 +317,53 @@ def test_integrated_grn_benchmark_validates_all_gradients_and_records_diagnostic
     record = measurement_from_result(grn_case, result, checkpointing="none")
     assert record.kernel_size is None
     assert record.phase == "training"
+
+
+@pytest.mark.parametrize("component", ["input", "gamma", "beta"])
+def test_grn_backward_diagnostics_consume_each_graph_once_outside_forward_timing(
+    monkeypatch, component
+):
+    from mednext_accel.ops.grn import GlobalResponseNorm3d
+    from mednext_accel.profiling.operator_benchmark import _time_backward_component
+
+    module = GlobalResponseNorm3d(3)
+    with torch.no_grad():
+        module.gamma.fill_(0.5)
+    sample = torch.randn(1, 3, 2, 3, 4, requires_grad=True)
+    gradient = torch.randn_like(sample)
+    target = {"input": sample, "gamma": module.gamma, "beta": module.beta}[component]
+    reference = torch.autograd.grad(module(sample), (target,), gradient)[0]
+    timed_active = False
+    forward_calls = 0
+    measured = []
+    autograd_grad = torch.autograd.grad
+
+    def forward(current):
+        nonlocal forward_calls
+        assert not timed_active, "backward diagnostics must exclude forward time"
+        forward_calls += 1
+        return current(sample)
+
+    def single_use_grad(*args, **kwargs):
+        assert not kwargs.get("retain_graph", False), "compiled buffers cannot be retained"
+        # Real autograd fails if a freed graph is reused by another timing sample.
+        return autograd_grad(*args, **kwargs)
+
+    def timed(function, *, warmup=2, repetitions=5):
+        nonlocal timed_active
+        for _ in range(warmup):
+            function()
+        assert warmup == 0 and repetitions == 1
+        timed_active = True
+        result = function()
+        timed_active = False
+        torch.testing.assert_close(result[0], reference)
+        measured.append(result[0].detach())
+        return float(len(measured)), 100 * len(measured)
+
+    monkeypatch.setattr(torch.autograd, "grad", single_use_grad)
+    monkeypatch.setattr(runner, "_timed", timed)
+    duration, peak = _time_backward_component(forward, module, target, gradient)
+    assert forward_calls == 7  # Two warmups and five fresh measured graphs.
+    assert len(measured) == 5
+    assert duration == 3.0 and peak == 500
