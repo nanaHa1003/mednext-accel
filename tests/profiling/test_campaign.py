@@ -139,3 +139,20 @@ def test_matching_family_aliases_are_allowed_and_conflicts_are_precise():
 def test_family_and_variant_must_be_supported(family, variant):
     with pytest.raises(ValueError, match="unknown.*(family|variant)"):
         load_campaign({"workloads": [{"family": family, "variant": variant}]})
+
+
+@pytest.mark.parametrize("preset", ["unknown", "mednext-v2"])
+def test_invalid_preset_lists_supported_presets_without_claiming_missing_v2(preset):
+    with pytest.raises(ValueError) as error:
+        load_campaign({"preset": preset})
+    assert str(error.value) == (
+        f"preset {preset!r} is unavailable; available presets: mednext-v1, all"
+    )
+    for available in ("mednext-v1", "all"):
+        campaign = load_campaign(
+            {
+                "preset": available,
+                "workloads": [{"family": "mednext_v2", "variant": "base"}],
+            }
+        )
+        assert campaign.workloads[0].family == "mednext_v2"

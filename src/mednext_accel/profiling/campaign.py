@@ -113,7 +113,7 @@ def load_campaign(source: CampaignSource | None) -> Campaign:
         raise ValueError("campaign phases was removed; profiling measures training only")
     preset = str(data.get("preset", "mednext-v1"))
     if preset not in ("mednext-v1", "all"):
-        raise ValueError(f"preset {preset!r} is unavailable; installed model families: mednext-v1")
+        raise ValueError(f"preset {preset!r} is unavailable; available presets: mednext-v1, all")
     raw_search = _mapping(data.get("batch_search", {}), "batch_search")
     unknown_search_fields = sorted(set(raw_search) - {"memory_fraction", "maximum"})
     if unknown_search_fields:
