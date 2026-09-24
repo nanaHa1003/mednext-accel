@@ -160,6 +160,19 @@ report = model.explain_optimization(
     device="cpu",
 )
 assert report.decisions
+with torch.device("meta"):
+    v2_base = mednext_accel.mednext_v2_base(
+        in_channels=1,
+        out_channels=3,
+        optimization="reference",
+    )
+    v2_wide = mednext_accel.mednext_v2_wide(in_channels=2, out_channels=8)
+assert v2_base.config.variant == "base"
+assert v2_base.config.base_channels == 32
+assert v2_base.optimization_source == "reference"
+assert v2_wide.config.variant == "wide"
+assert v2_wide.config.base_channels == 64
+assert v2_wide.optimization_source == "auto"
 assert 'site-packages' in mednext_accel.__file__
 """
     subprocess.run([str(python), "-c", program], cwd=outside_repository, check=True)

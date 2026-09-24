@@ -14,6 +14,16 @@ Neither construction nor first forward benchmarks or writes cache files. Use
 layouts, and state-dict keys are identical in every mode. Checkpoint style and
 batch size remain independent user choices.
 
+For MedNeXt v2, `auto` installs adaptive convolution and GRN wrappers. Existing
+bundled convolution rules can resolve normally, but there is currently no
+bundled positive fused-GRN rule. GRN therefore stays on its PyTorch reference
+implementation unless a user-supplied, measured policy selects
+`triton_fused_grn`. The GRN decision is integral: forward, input gradient, and
+both parameter gradients use one implementation. Evaluation, disabled-gradient
+execution, and export bypass fused GRN before importing its optional Triton
+backend. Use `optimization="reference"` when every v2 operator should remain on
+the reference path.
+
 ## Runtime policy YAML
 
 Runtime policies describe **which implementation to use**. Generated evidence
@@ -241,6 +251,33 @@ batch_search:
 ```bash
 mednext-accel profile workload.yaml
 ```
+
+MedNeXt v2 is selected per workload with `family: mednext_v2`; its supported
+variants are `base` and `wide`. For example, this campaign defines the evidence
+to collect later without implying that the current repository has measured it:
+
+```yaml
+objective: balanced
+compile_mode: max-autotune-no-cudagraphs
+seed: 0
+workloads:
+  - family: mednext_v2
+    variant: base
+    spatial: [128, 128, 128]
+    in_channels: 1
+    out_channels: 3
+    dtypes: [bfloat16]
+    checkpointing: all-expansion
+batch_search:
+  memory_fraction: 0.90
+  maximum: 8
+```
+
+The v2 campaign discovers convolution and GRN shapes from the constructed
+model. GRN candidates record combined training time plus forward, dX, dGamma,
+and dBeta diagnostics. Policy publication requires numerical validation of all
+four results and acceptance by the complete-model comparison. Until such a run
+produces and validates a local overlay, `auto` does not infer a fused-GRN win.
 
 Checkpoint values are `none`, `all-expansion`, `whole-block`, or `auto` (all three
 contexts). The profiler does not choose checkpointing for application code.

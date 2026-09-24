@@ -16,7 +16,7 @@ The priorities are:
 
 1. Selective checkpointing of the expanded branch.
 2. Resolution-aware checkpointing.
-3. Fused 3D Global Response Normalization (GRN).
+3. Fused 3D Global Response Normalization (GRN), pending performance evidence.
 4. Memory-efficient GroupNorm.
 5. Configurable deep-supervision output, including MONAI-compatible behavior.
 
@@ -288,19 +288,19 @@ outstanding.
 
 ## 3. Fused 3D GRN
 
-### Motivation
+### Motivation and current status
 
-GRN is specific to MedNeXt v2 and other ConvNeXt-v2-like models. A naive eager
-implementation materializes several large pointwise intermediates and caused a
-large time and memory increase in the initial v2 probe. Compilation eliminated
-almost all additional peak memory, so the primary goal of a custom operator is
-an efficient eager path without regressing compiled execution.
+GRN is specific to MedNeXt v2 and other ConvNeXt-v2-like models. The package now
+contains a PyTorch reference implementation, a fused Triton training operator,
+adaptive policy dispatch, and profiler support. No positive fused-GRN policy is
+bundled yet because isolated and complete-model performance evidence has not
+been collected for this implementation.
 
 For `x` in NCDHW layout, use the ConvNeXt-v2 definition:
 
 ```text
 g[n,c] = sqrt(sum_spatial(x[n,c]^2))
-h[n]   = mean_channel(g[n,:]) + eps
+h[n]   = sum_channel(g[n,:]) + eps
 r[n,c] = g[n,c] / h[n]
 y      = x + gamma * x * r + beta
 ```
@@ -308,9 +308,9 @@ y      = x + gamma * x * r + beta
 Use `eps=1e-6`, zero-initialized `gamma` and `beta`, and FP32 reduction
 accumulation. Do not materialize full-sized `r` or `x * r` tensors.
 
-### Proposed operator boundary
+### Operator boundary
 
-GRN should be an architecture-independent layer with:
+GRN is an architecture-independent layer with:
 
 - A pure PyTorch reference implementation.
 - A Triton forward and backward implementation.
@@ -319,25 +319,25 @@ GRN should be an architecture-independent layer with:
 - Per-shape benchmarking before selecting the Triton implementation.
 
 The forward kernels compute spatial sum-of-squares partials, finish channel
-norms, reduce the channel mean, and apply the affine residual expression. The
+norms, reduce the channel sum, and apply the affine residual expression. The
 backward kernels compute spatial partials for `sum(dy*x)` and `sum(dy)`, finish
 the coupled channel derivative, and apply `dX`. FP16 and BF16 reductions use
 FP32 partials.
 
-Integrate the kernels with `torch.library.triton_op` and registered autograd so
-the implementation remains visible to `torch.compile`. A standalone custom-op
-boundary must not be enabled by default unless a full-model benchmark shows it
-is beneficial.
+The kernels use `torch.library.triton_op` and registered autograd so the
+implementation remains visible to `torch.compile`. `optimization="auto"` uses
+the reference GRN until a measured user policy, or a future evidence-backed
+bundled policy, selects the fused implementation. Evaluation and export always
+take the reference path.
 
-### Success criteria
+### Validation and release gate
 
-- Correct forward, dX, dGamma, and dBeta against the PyTorch reference.
-- Correct zero-input behavior without division by zero.
-- Batch-one and multi-batch support.
-- `torch.library.opcheck` and compiled full-graph coverage.
-- A substantial eager memory reduction.
-- No material compiled full-step regression.
-- Independent results on RTX 5090, L40S, RTX A6000, and RTX 8000.
+- Forward, dX, dGamma, and dBeta are checked against the PyTorch reference.
+- Zero-input behavior, batch-one and multi-batch execution, opcheck, and
+  compiled full-graph behavior have correctness coverage.
+- Publishing a positive rule still requires per-shape timing and memory data,
+  followed by a complete-model comparison for the same generated policy.
+- Cross-device measurements remain future evidence rather than current claims.
 
 Fusion with GELU or the compression GEMM is outside the first implementation.
 
@@ -467,8 +467,9 @@ MONAI interoperability favors `monai`.
 2. Measure high-resolution-only policies and retain only useful Pareto points.
 3. Add the deep-supervision output switch and MONAI contract tests.
 4. Re-profile the resulting Base and Large models.
-5. Implement fused GRN if eager v2 remains a supported performance target.
-6. Reconsider GroupNorm only if the new profile justifies it.
+5. Profile fused GRN and publish a positive rule only if the complete v2 model
+   accepts it.
+6. Reconsider GroupNorm only if a new profile justifies it.
 
 This order prioritizes the largest measured memory reduction, establishes the
 output compatibility contract early, and postpones custom kernels until the

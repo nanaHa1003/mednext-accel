@@ -8,7 +8,10 @@ MedNeXt v2 Base and Wide use the same evaluation export contract. Their public
 factories default to `optimization="auto"`, while evaluation keeps GRN on the
 reference PyTorch implementation and does not import its optional Triton
 backend. For example, `mednext_v2_base(in_channels=1, out_channels=3).eval()`
-can be exported by every method below.
+can be exported by every method below. `optimization="reference"` is also
+supported but is not required for export. Checkpoint settings affect only
+gradient-enabled training, so the same evaluation graph contract applies to
+models constructed with expansion or whole-block checkpointing.
 
 ## TorchScript trace
 

@@ -57,3 +57,21 @@ def test_public_guides_have_resolvable_local_links(path: Path) -> None:
             continue
         destination = target.split("#", 1)[0]
         assert (document.parent / destination).exists(), f"{path}: {target}"
+
+
+def test_readme_documents_the_v2_public_contract() -> None:
+    content = (_REPOSITORY / "README.md").read_text()
+
+    for public_name in ("mednext_v2_base", "mednext_v2_wide"):
+        assert public_name in content
+    assert 'optimization="reference"' in content
+    assert '"style": "expansion"' in content
+    assert "user-supplied policy" in content
+    assert "No MedNeXt v2 performance result is published yet" in content
+
+
+def test_grn_documentation_uses_the_channel_sum_formula() -> None:
+    content = (_REPOSITORY / "docs/benchmarks/activation-memory.md").read_text()
+
+    assert "sum_channel(g[n,:]) + eps" in content
+    assert "mean_channel(g[n,:]) + eps" not in content

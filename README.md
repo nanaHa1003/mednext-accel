@@ -3,9 +3,10 @@
 [![CI](https://github.com/nanaHa1003/mednext-accel/actions/workflows/ci.yml/badge.svg)](https://github.com/nanaHa1003/mednext-accel/actions/workflows/ci.yml)
 
 MedNeXt-Accel is a production-oriented implementation of MedNeXt model
-architectures for PyTorch. It provides a pure-PyTorch reference model, lossless
-checkpoint import, selective activation checkpointing, portable evaluation
-export, and optional operator-based CUDA acceleration.
+architectures for PyTorch. It provides MedNeXt v1 and paper-faithful 3D
+MedNeXt v2 models, pure-PyTorch reference execution, lossless v1 checkpoint
+import, selective activation checkpointing, portable evaluation export, and
+optional operator-based CUDA acceleration.
 
 The package contains architecture code only. It has no trainer, dataset
 pipeline, loss framework, preprocessing stack, or nnU-Net dependency.
@@ -22,6 +23,7 @@ shape-aware CUDA acceleration.
 | Capability | Official MedNeXt v1 | MONAI MedNeXt | MedNeXt-Accel |
 |---|---|---|---|
 | Published Small/Base/Medium/Large, 2D and 3D | Yes | Yes | Yes |
+| MedNeXt v2 Base/Wide, 3D | No | No | **Yes** |
 | Standalone model without nnU-Net | No; distributed in an nnU-Net v1 fork | Yes, as part of MONAI | **Yes; architecture-only package** |
 | Load official v1 checkpoints | Native format | No conversion API; Base/Medium/Large also differ in down-block expansion ratios | **Automatic, tensor-preserving conversion** |
 | Load MONAI checkpoints | No conversion API | Native format | **Automatic; explicit MONAI-compatible factories for Base/Medium/Large** |
@@ -145,6 +147,35 @@ With deep supervision enabled, training returns a tuple by default. `list` and
 upsampled `stacked` formats are optional. Evaluation always returns one primary
 logits tensor.
 
+MedNeXt v2 is a separate 3D architecture with fixed paper-defined Base and Wide
+configurations:
+
+```python
+from mednext_accel import CheckpointConfig, mednext_v2_base, mednext_v2_wide
+
+# This mapping can come directly from YAML.
+checkpoint_settings = {"style": "expansion", "stages": [0, 1]}
+
+base = mednext_v2_base(
+    in_channels=1,
+    out_channels=3,
+    deep_supervision=True,
+    checkpointing=CheckpointConfig(**checkpoint_settings),
+)
+wide = mednext_v2_wide(
+    in_channels=1,
+    out_channels=8,
+    checkpointing=CheckpointConfig(style="block", stages=None),
+)
+```
+
+The v2 factories use a k3 3D architecture and do not expose architecture knobs
+that would change the published Base or Wide topology. They share the v1
+checkpointing contract: `style="expansion"` checkpoints expansion branches,
+`style="block"` checkpoints complete blocks, and `stages` selects resolution
+levels. Lists loaded from YAML are accepted and normalized internally. This
+package does not claim checkpoint compatibility between v1 and v2.
+
 ## Load existing weights
 
 ```python
@@ -204,6 +235,15 @@ Unsupported operators, 2D execution, and evaluation/export remain native.
 A custom selection that fails an implementation guard falls through to lower
 policy layers; an explicit reference tombstone stops resolution.
 
+MedNeXt v2 uses the same adaptive convolution policy stack and adds one GRN
+training decision covering forward and all gradients. At present, bundled
+policies contain no positive fused-GRN rule. Therefore
+`optimization="auto"` keeps GRN on its PyTorch reference path unless a
+user-supplied policy with measured evidence selects `triton_fused_grn` for the
+current context. `optimization="reference"` constructs the v2 model with only
+reference operators. Evaluation and export always use reference GRN regardless
+of the training policy. No MedNeXt v2 performance result is published yet.
+
 Checkpointing and batch size remain your choices. Bundled and newly generated
 local rules match operators independently of model variant or checkpoint style;
 evidence retains those campaign contexts. High-batch SM120 devices retain
@@ -252,6 +292,31 @@ or `memory`. Profiling currently supports BF16. A supplied positive `maximum`
 is tested first; omit it to discover the upper bound with exponential growth
 and binary refinement. `memory_fraction` determines how much of total GPU VRAM
 a successful model probe may consume before it is treated as infeasible.
+
+The same framework can collect future v2 evidence. Select the model family on
+each workload; v2 variants are `base` and `wide`:
+
+```yaml
+objective: balanced
+compile_mode: max-autotune-no-cudagraphs
+batch_search:
+  memory_fraction: 0.90
+  maximum: 8
+workloads:
+  - family: mednext_v2
+    variant: base
+    spatial: [128, 128, 128]
+    in_channels: 1
+    out_channels: 3
+    dtypes: [bfloat16]
+    checkpointing: all-expansion
+```
+
+Running `mednext-accel profile v2-base-128.yaml` later will benchmark the
+discovered v2 convolution and GRN shapes, retain correctness diagnostics and
+whole-model acceptance evidence, then write a policy YAML suitable for the
+factory's `optimization=` argument. A faster isolated GRN result alone is not
+enough to publish a positive runtime rule.
 
 The profiler measures **training only**. It detects the GPU and VRAM, searches
 for the largest feasible batch with isolated subprocesses, profiles integrated
