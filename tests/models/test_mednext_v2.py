@@ -197,3 +197,159 @@ def test_custom_config_honors_independent_resampling_ratios():
         4,
     ]
     assert [b.expand.out_channels // b.expand.in_channels for b in model.upsamples] == [4, 3, 2, 1]
+
+
+@pytest.mark.parametrize("variant", ["base", "wide"])
+def test_factory_installs_both_adaptive_families_and_preserves_state(monkeypatch, variant):
+    from mednext_accel.models import mednext_v2 as v2
+    from mednext_accel.ops import AdaptiveDepthwise3d, AdaptiveGlobalResponseNorm3d
+    from mednext_accel.ops.adaptive import AdaptivePointwise3d
+
+    monkeypatch.setattr(v2, "get_mednext_v2_config", lambda *a, **kw: small_config())
+    factory = getattr(models, f"mednext_v2_{variant}")
+    reference = factory(in_channels=1, out_channels=3, optimization="reference")
+    automatic = factory(in_channels=1, out_channels=3, optimization="auto")
+    assert isinstance(automatic.stem, AdaptivePointwise3d)
+    assert isinstance(automatic.encoder_stages[0][0].depthwise, AdaptiveDepthwise3d)
+    assert isinstance(automatic.encoder_stages[0][0].grn, AdaptiveGlobalResponseNorm3d)
+    assert automatic.state_dict().keys() == reference.state_dict().keys()
+    automatic.load_state_dict(reference.state_dict(), strict=True)
+    assert not any(
+        isinstance(m, (AdaptivePointwise3d, AdaptiveDepthwise3d, AdaptiveGlobalResponseNorm3d))
+        for m in reference.modules()
+    )
+    parameters = dict(reference.named_parameters())
+    assert automatic.stem.model_context.family == "mednext_v2"
+    x = torch.randn(2, 1, 16, 17, 18, requires_grad=True)
+    y = x.detach().clone().requires_grad_()
+    expected, actual = reference(x), automatic(y)
+    torch.testing.assert_close(actual, expected)
+    expected.square().mean().backward()
+    actual.square().mean().backward()
+    torch.testing.assert_close(x.grad, y.grad)
+    for name, parameter in reference.named_parameters():
+        torch.testing.assert_close(automatic.get_parameter(name).grad, parameter.grad)
+    v2._configure_optimization(reference, "auto")
+    assert all(reference.get_parameter(name) is p for name, p in parameters.items())
+
+
+@pytest.mark.parametrize("source", ["torch", "conservative", "autotune"])
+def test_v2_rejects_removed_optimization_sources(monkeypatch, source):
+    from mednext_accel.models import mednext_v2 as v2
+
+    monkeypatch.setattr(v2, "get_mednext_v2_config", lambda *a, **kw: small_config())
+    with pytest.raises(ValueError, match="was removed"):
+        models.mednext_v2_base(in_channels=1, out_channels=3, optimization=source)
+
+
+def test_optimization_report_uses_each_operator_input_resolution(monkeypatch):
+    from mednext_accel.models import mednext_v2 as v2
+    from mednext_accel.ops import AdaptiveDepthwise3d, AdaptiveGlobalResponseNorm3d
+    from mednext_accel.ops.adaptive import AdaptivePointwise3d
+
+    model = v2._configure_optimization(
+        models.MedNeXtV2(small_config(deep_supervision=True)), "auto"
+    )
+    actual_shapes = {}
+
+    def record_input(role):
+        def hook(module, args):
+            actual_shapes[role] = tuple(args[0].shape[2:])
+
+        return hook
+
+    handles = [
+        m.register_forward_pre_hook(record_input(role))
+        for role, m in model.named_modules()
+        if isinstance(m, (AdaptiveDepthwise3d, AdaptivePointwise3d, AdaptiveGlobalResponseNorm3d))
+    ]
+    with torch.no_grad():
+        model(torch.randn(1, 1, 17, 19, 21))
+    for handle in handles:
+        handle.remove()
+    resolved_shapes = {}
+    resolver = model._optimization_resolver
+    original = resolver.resolve
+
+    def resolve(descriptor, context, phase):
+        resolved_shapes[descriptor.role] = context.spatial_shape
+        return original(descriptor, context, phase)
+
+    monkeypatch.setattr(resolver, "resolve", resolve)
+    report = model.explain_optimization(
+        input_shape=(1, 1, 17, 19, 21), dtype="bfloat16", device="cpu"
+    )
+    assert resolved_shapes == actual_shapes
+    grn = [d for d in report.decisions if d.descriptor.family == "global_response_norm3d"]
+    assert len(grn) == 17
+    assert all(d.phase == "training" for d in grn)
+    assert all("kernel_size" not in d.descriptor.to_primitive() for d in grn)
+    depthwise = [d for d in report.decisions if d.descriptor.role == "upsamples.0.depthwise"]
+    assert {d.phase for d in depthwise} == {"backward_input", "backward_weight"}
+
+
+def test_external_grn_policy_report_and_native_eval(monkeypatch):
+    from types import SimpleNamespace
+
+    from mednext_accel.models import mednext_v2 as v2
+
+    policy = {
+        "version": 2,
+        "kind": "mednext-accel-policy",
+        "name": "v2-grn",
+        "target": {"vendor": "nvidia"},
+        "scope": {"model_family": "mednext_v2", "checkpointing": "all-expansion"},
+        "rules": [
+            {
+                "id": "grn",
+                "when": {"family": "global_response_norm3d"},
+                "use": {"training": {"implementation": "triton_fused_grn"}},
+                "confidence": "measured-exact-context",
+            }
+        ],
+    }
+    monkeypatch.setattr(v2, "get_mednext_v2_config", lambda *a, **kw: small_config())
+    model = models.mednext_v2_base(
+        in_channels=1,
+        out_channels=3,
+        optimization=policy,
+        checkpointing=CheckpointConfig(style="expansion"),
+    )
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda *a: (8, 6))
+    monkeypatch.setattr(
+        torch.cuda, "get_device_properties", lambda *a: SimpleNamespace(total_memory=24 * 2**30)
+    )
+    report = model.explain_optimization(
+        input_shape=(2, 1, 32, 32, 32), dtype="bfloat16", device="cuda"
+    )
+    grn = [d for d in report.decisions if d.descriptor.family == "global_response_norm3d"]
+    assert len(grn) == 17
+    assert all(d.implementation == "triton_fused_grn" and d.policy == "v2-grn" for d in grn)
+    original = model._optimization_resolver.resolve
+
+    def resolve(descriptor, context, phase):
+        assert descriptor.family != "global_response_norm3d"
+        return original(descriptor, context, phase)
+
+    monkeypatch.setattr(model._optimization_resolver, "resolve", resolve)
+    report = model.eval().explain_optimization(
+        input_shape=(2, 1, 32, 32, 32), dtype="bfloat16", device="cuda"
+    )
+    grn = [d for d in report.decisions if d.descriptor.family == "global_response_norm3d"]
+    assert len(grn) == 17
+    assert all(d.implementation == "reference" and d.disposition == "native" for d in grn)
+
+
+def test_reference_optimization_report_and_input_rank():
+    model = models.MedNeXtV2(small_config())
+    report = model.explain_optimization(
+        input_shape=(2, 1, 32, 32, 32), dtype="float32", device="cpu"
+    )
+    assert report.decisions
+    assert all(d.implementation == "reference" for d in report.decisions)
+    assert (
+        len([d for d in report.decisions if d.descriptor.family == "global_response_norm3d"]) == 17
+    )
+    with pytest.raises(ValueError, match="rank 5"):
+        model.explain_optimization(input_shape=(1, 1, 32, 32), dtype="float32", device="cpu")

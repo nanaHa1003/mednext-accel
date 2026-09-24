@@ -2,16 +2,31 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint
 
 from ..checkpointing import CheckpointConfig
+from ..ops.adaptive import (
+    AdaptiveDepthwise3d,
+    AdaptivePointwise3d,
+    ModelOptimizationContext,
+    _conv_descriptor,
+    execution_context_for_shape,
+    install_adaptive_operators,
+)
+from ..ops.grn import AdaptiveGlobalResponseNorm3d, GlobalResponseNorm3d, install_adaptive_grn
+from ..optimization.descriptors import OperatorDescriptor
+from ..optimization.policies import PolicyRegistry
+from ..optimization.policy_resolver import PolicyDecision
+from ..optimization.report import OptimizationReport
 from .blocks import OutputHead
 from .blocks_v2 import MedNeXtV2Block, MedNeXtV2DownBlock, MedNeXtV2UpBlock
 from .config_v2 import MedNeXtV2Config, get_mednext_v2_config
-from .mednext_v1 import DeepSupervisionOutput, OptimizationSource
+from .mednext_v1 import DeepSupervisionOutput, OptimizationSource, _checkpoint_name
 
 
 def _reconcile_spatial(x: Tensor, target_shape: tuple[int, ...]) -> Tensor:
@@ -159,6 +174,146 @@ class MedNeXtV2(nn.Module):
         ]
         return torch.stack(resized, dim=1)
 
+    def explain_optimization(
+        self,
+        *,
+        input_shape: tuple[int, ...],
+        dtype: str | torch.dtype,
+        device: str | torch.device,
+    ) -> OptimizationReport:
+        """Resolve each operator at its input resolution without running the model."""
+
+        if len(input_shape) != 5:
+            raise ValueError("input_shape must have rank 5 for a 3D model")
+        resolver = self.__dict__.get("_optimization_resolver")
+        model_context = ModelOptimizationContext(
+            "mednext_v2", self.config.variant, _checkpoint_name(self.checkpointing)
+        )
+        target = torch.device(device)
+        sm = None
+        total_vram = 0
+        if target.type == "cuda" and torch.cuda.is_available():
+            sm = torch.cuda.get_device_capability(target)
+            total_vram = torch.cuda.get_device_properties(target).total_memory
+        context = execution_context_for_shape(
+            model_context,
+            batch_size=input_shape[0],
+            spatial_shape=input_shape[2:],
+            dtype=dtype,
+            device_type=target.type,
+            sm=sm,
+            total_vram_bytes=total_vram,
+            training=self.training,
+        )
+        decisions = []
+        for role, module in self.named_modules():
+            if isinstance(module, (nn.Conv3d, nn.ConvTranspose3d, GlobalResponseNorm3d)):
+                descriptor = (
+                    OperatorDescriptor.normalization(
+                        family="global_response_norm3d", channels=module.gamma.shape[1], role=role
+                    )
+                    if isinstance(module, GlobalResponseNorm3d)
+                    else _conv_descriptor(module, role=role)
+                )
+                decisions.append(
+                    PolicyDecision(
+                        descriptor,
+                        context.phase,
+                        "reference",
+                        {},
+                        "reference",
+                        "unwrapped",
+                        "guard",
+                        disposition="unwrapped",
+                    )
+                )
+                continue
+            if not isinstance(
+                module, (AdaptivePointwise3d, AdaptiveDepthwise3d, AdaptiveGlobalResponseNorm3d)
+            ):
+                continue
+            module_context = replace(
+                context, spatial_shape=_spatial_shape_for_role(role, context.spatial_shape)
+            )
+            if isinstance(module, AdaptiveGlobalResponseNorm3d) and not module.training:
+                decisions.append(
+                    PolicyDecision(
+                        module.descriptor,
+                        "inference",
+                        "reference",
+                        {},
+                        "reference",
+                        "context-guard",
+                        "guard",
+                        guard_reason="GRN evaluation uses reference",
+                    )
+                )
+            elif isinstance(module, AdaptiveDepthwise3d):
+                decisions.extend(
+                    resolver.resolve(module.descriptor, module_context, phase)
+                    for phase in ("backward_input", "backward_weight")
+                )
+            else:
+                phase = (
+                    "training"
+                    if isinstance(module, AdaptiveGlobalResponseNorm3d)
+                    else context.phase
+                )
+                decisions.append(resolver.resolve(module.descriptor, module_context, phase))
+        report_warnings = tuple(
+            dict.fromkeys(
+                decision.warning for decision in decisions if decision.warning is not None
+            )
+        )
+        return OptimizationReport(
+            (tuple(policy.name for policy in resolver.context_layers(context)) or ("reference",))
+            if resolver is not None
+            else ("reference",),
+            context,
+            tuple(decisions),
+            report_warnings,
+        )
+
+
+def _spatial_shape_for_role(role: str, input_spatial: tuple[int, ...]) -> tuple[int, ...]:
+    parts = role.split(".")
+    reductions = 0
+    if parts[0] == "encoder_stages":
+        reductions = int(parts[1])
+    elif parts[0] == "downsamples":
+        reductions = int(parts[1]) + (parts[-1] not in ("depthwise", "residual"))
+    elif parts[0] == "bottleneck":
+        reductions = 4
+    elif parts[0] in ("upsamples", "deep_supervision_heads"):
+        reductions = 4 - int(parts[1])
+    elif parts[0] == "decoder_stages":
+        reductions = 3 - int(parts[1])
+    spatial = input_spatial
+    for _ in range(reductions):
+        spatial = tuple((size + 1) // 2 for size in spatial)
+    if parts[0] == "upsamples" and parts[-1] not in ("depthwise", "residual"):
+        # Expansion and GRN precede the up block's right-edge padding.
+        spatial = tuple(2 * size - 1 for size in spatial)
+    return spatial
+
+
+def _configure_optimization(model: MedNeXtV2, optimization: OptimizationSource) -> MedNeXtV2:
+    model.optimization_source = optimization
+    if optimization == "reference":
+        return model
+    if isinstance(optimization, str) and optimization in ("torch", "conservative", "autotune"):
+        raise ValueError(f"optimization={optimization!r} was removed; use 'auto' or 'reference'")
+    external = None if optimization == "auto" else optimization
+    resolver = PolicyRegistry(external=external).resolver()
+    model_context = ModelOptimizationContext(
+        "mednext_v2", model.config.variant, _checkpoint_name(model.checkpointing)
+    )
+    install_adaptive_operators(model, resolver=resolver, model_context=model_context)
+    install_adaptive_grn(model, resolver=resolver, model_context=model_context)
+    model.__dict__["_optimization_resolver"] = resolver
+    model.__dict__["_optimization_model_context"] = model_context
+    return model
+
 
 def _factory(
     variant: str,
@@ -180,10 +335,7 @@ def _factory(
         checkpointing=checkpointing,
         deep_supervision_output=deep_supervision_output,
     )
-    # Retain the requested source; adaptive operator installation follows in
-    # the dispatch integration. All operators currently use reference PyTorch.
-    model.optimization_source = optimization
-    return model
+    return _configure_optimization(model, optimization)
 
 
 def mednext_v2_base(
@@ -195,7 +347,7 @@ def mednext_v2_base(
     checkpointing: CheckpointConfig | None = None,
     optimization: OptimizationSource = "auto",
 ) -> MedNeXtV2:
-    """Build published MedNeXt v2 Base, currently using reference operators."""
+    """Build published MedNeXt v2 Base, with policy-driven training operators."""
 
     return _factory(
         "base",
@@ -217,7 +369,7 @@ def mednext_v2_wide(
     checkpointing: CheckpointConfig | None = None,
     optimization: OptimizationSource = "auto",
 ) -> MedNeXtV2:
-    """Build published MedNeXt v2 Wide, currently using reference operators."""
+    """Build published MedNeXt v2 Wide, with policy-driven training operators."""
 
     return _factory(
         "wide",

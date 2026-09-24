@@ -15,6 +15,18 @@ SemanticEquivalence = Literal["exact", "numerical", "approximate"]
 EligibilityGuard = Callable[["OperatorDescriptor", "ExecutionContext", str], str | None]
 
 
+def _grn_eligibility(
+    descriptor: OperatorDescriptor, context: ExecutionContext, phase: str
+) -> str | None:
+    if context.phase != "training" or phase != "training":
+        return "implementation requires training"
+    if context.device_type != "cuda":
+        return "implementation requires CUDA"
+    if context.dtype not in ("float16", "bfloat16"):
+        return "implementation does not support this dtype"
+    return None
+
+
 def _pointwise_eligibility(
     descriptor: OperatorDescriptor, context: ExecutionContext, phase: str
 ) -> str | None:
@@ -207,6 +219,15 @@ def default_implementation_registry(
             False,
             partial(_depthwise_eligibility, direction="downsample", triton_available=available),
             ("grad_enabled", "rank_5", "contiguous", "zero_output_padding"),
+        ),
+        (
+            "triton_fused_grn",
+            ("global_response_norm3d",),
+            ("training",),
+            "numerical",
+            False,
+            _grn_eligibility,
+            ("grad_enabled", "rank_5", "contiguous"),
         ),
         ("gelu_tanh", ("gelu",), ("inference",), "approximate", True, None, ()),
     )
