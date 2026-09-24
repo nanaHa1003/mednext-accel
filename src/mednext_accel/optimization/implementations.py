@@ -16,7 +16,11 @@ EligibilityGuard = Callable[["OperatorDescriptor", "ExecutionContext", str], str
 
 
 def _grn_eligibility(
-    descriptor: OperatorDescriptor, context: ExecutionContext, phase: str
+    descriptor: OperatorDescriptor,
+    context: ExecutionContext,
+    phase: str,
+    *,
+    triton_available: bool,
 ) -> str | None:
     if context.phase != "training" or phase != "training":
         return "implementation requires training"
@@ -24,6 +28,8 @@ def _grn_eligibility(
         return "implementation requires CUDA"
     if context.dtype not in ("float16", "bfloat16"):
         return "implementation does not support this dtype"
+    if not triton_available:
+        return "Triton backend is unavailable"
     return None
 
 
@@ -226,7 +232,7 @@ def default_implementation_registry(
             ("training",),
             "numerical",
             False,
-            _grn_eligibility,
+            partial(_grn_eligibility, triton_available=available),
             ("grad_enabled", "rank_5", "contiguous"),
         ),
         ("gelu_tanh", ("gelu",), ("inference",), "approximate", True, None, ()),

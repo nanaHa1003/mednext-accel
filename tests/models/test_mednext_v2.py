@@ -341,6 +341,45 @@ def test_external_grn_policy_report_and_native_eval(monkeypatch):
     assert all(d.implementation == "reference" and d.disposition == "native" for d in grn)
 
 
+def test_external_grn_policy_report_rejects_unavailable_triton(monkeypatch):
+    from types import SimpleNamespace
+
+    from mednext_accel.models import mednext_v2 as v2
+    from mednext_accel.optimization import policy_resolver
+
+    policy = {
+        "version": 2,
+        "kind": "mednext-accel-policy",
+        "name": "v2-grn",
+        "target": {"vendor": "nvidia"},
+        "rules": [
+            {
+                "id": "grn",
+                "when": {"family": "global_response_norm3d"},
+                "use": {"training": {"implementation": "triton_fused_grn"}},
+                "confidence": "measured-exact-context",
+            }
+        ],
+    }
+    monkeypatch.setattr(v2, "get_mednext_v2_config", lambda *a, **kw: small_config())
+    monkeypatch.setattr(policy_resolver, "find_spec", lambda name: None)
+    model = models.mednext_v2_base(in_channels=1, out_channels=3, optimization=policy)
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda *a: (8, 6))
+    monkeypatch.setattr(
+        torch.cuda, "get_device_properties", lambda *a: SimpleNamespace(total_memory=24 * 2**30)
+    )
+
+    report = model.explain_optimization(
+        input_shape=(2, 1, 32, 32, 32), dtype="bfloat16", device="cuda"
+    )
+
+    grn = [d for d in report.decisions if d.descriptor.family == "global_response_norm3d"]
+    assert len(grn) == 17
+    assert all(d.implementation == "reference" for d in grn)
+    assert all(d.guard_reason == "Triton backend is unavailable" for d in grn)
+
+
 def test_reference_optimization_report_and_input_rank():
     model = models.MedNeXtV2(small_config())
     report = model.explain_optimization(
