@@ -4,7 +4,7 @@ import importlib
 
 import pytest
 import torch
-from torch._subclasses.fake_tensor import FakeTensorMode
+from torch._subclasses.fake_tensor import FakeTensor, FakeTensorMode
 
 from mednext_accel.ops.grn import global_response_norm3d_reference
 
@@ -22,6 +22,14 @@ def inputs(shape, dtype, *, device="cuda", requires_grad=True):
     gamma = torch.randn(1, shape[1], 1, 1, 1, device=device, requires_grad=requires_grad)
     beta = torch.randn_like(gamma, requires_grad=requires_grad)
     return x, gamma, beta
+
+
+def fake_cuda_tensor(mode, shape, dtype, *, device="cuda", stride=None):
+    if stride is None:
+        elem = torch.empty(shape, device="meta", dtype=dtype)
+    else:
+        elem = torch.empty_strided(shape, stride, device="meta", dtype=dtype)
+    return FakeTensor(mode, elem, torch.device(device))
 
 
 def compare_with_reference(x, gamma, beta, upstream, *, eps=1e-6):
@@ -124,25 +132,38 @@ def test_public_entry_rejects_cpu():
     ],
 )
 def test_public_entry_rejects_unsupported_cuda_metadata(case, message):
-    with FakeTensorMode():
-        x, gamma, beta = inputs((2, 3, 2, 3, 5), torch.float16, requires_grad=False)
+    mode = FakeTensorMode()
+    with mode:
+        x = fake_cuda_tensor(mode, (2, 3, 2, 3, 5), torch.float16)
+        gamma = fake_cuda_tensor(mode, (1, 3, 1, 1, 1), torch.float32)
+        beta = fake_cuda_tensor(mode, (1, 3, 1, 1, 1), torch.float32)
         eps = 1e-6
         if case == "rank":
-            x = x[0]
+            x = fake_cuda_tensor(mode, (3, 2, 3, 5), torch.float16)
         elif case == "fp32":
-            x = x.float()
+            x = fake_cuda_tensor(mode, (2, 3, 2, 3, 5), torch.float32)
         elif case == "strided":
-            x = x.transpose(-1, -2)
+            x = fake_cuda_tensor(
+                mode,
+                (2, 3, 2, 5, 3),
+                torch.float16,
+                stride=(90, 30, 15, 1, 5),
+            )
         elif case == "affine_dtype":
-            gamma = gamma.half()
+            gamma = fake_cuda_tensor(mode, (1, 3, 1, 1, 1), torch.float16)
         elif case == "affine_shape":
-            beta = beta.flatten()
+            beta = fake_cuda_tensor(mode, (3,), torch.float32)
         elif case == "affine_stride":
-            gamma = torch.empty(1, 6, 1, 1, 1, device="cuda")[:, ::2]
+            gamma = fake_cuda_tensor(
+                mode,
+                (1, 3, 1, 1, 1),
+                torch.float32,
+                stride=(6, 2, 1, 1, 1),
+            )
         elif case == "device":
-            beta = torch.empty_like(beta, device="cuda:1")
+            beta = fake_cuda_tensor(mode, (1, 3, 1, 1, 1), torch.float32, device="cuda:1")
         elif case == "empty":
-            x = x[:0]
+            x = fake_cuda_tensor(mode, (0, 3, 2, 3, 5), torch.float16)
         elif case == "epsilon":
             eps = 0.0
         with pytest.raises(ValueError, match=message):
